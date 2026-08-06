@@ -1,82 +1,95 @@
 <script setup lang="ts">
 import {
-  CheckCircle2,
   Code2,
-  FolderOpen,
   KeyRound,
   Package,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   Save,
-  Server,
   Settings,
   SlidersHorizontal,
-  Wrench,
 } from "@lucide/vue";
 import { message, Modal } from "antdv-next";
 import { computed, onMounted, ref, watch } from "vue";
-import { getDefaultProjectPath, loadPiConfiguration, savePiModels, savePiSettings } from "./api.ts";
+import {
+  getDefaultProjectPath,
+  listAgents,
+  loadConfiguration,
+  saveModels,
+  saveSettings,
+} from "./api.ts";
+import AgentRail from "./components/AgentRail.vue";
+import CredentialsPanel from "./components/CredentialsPanel.vue";
 import GeneralSettings from "./components/GeneralSettings.vue";
 import JsonInspector from "./components/JsonInspector.vue";
 import ProvidersPanel from "./components/ProvidersPanel.vue";
 import ResourcesPanel from "./components/ResourcesPanel.vue";
-import type { AgentConfiguration, ConfigScope, ModelsConfiguration, ViewId } from "./types.ts";
+import type {
+  AgentConfiguration,
+  AgentSummary,
+  ConfigScope,
+  ModelsConfiguration,
+  ViewId,
+} from "./types.ts";
 
+/**
+ * Tabs are derived from the adapter's declared capabilities, so a new agent only needs a
+ * backend adapter — no changes here.
+ */
+const sectionCatalog = [
+  { key: "settings", label: "基础设置", icon: Settings },
+  { key: "providers", label: "模型服务", icon: SlidersHorizontal },
+  { key: "credentials", label: "凭据与变量", icon: KeyRound },
+  { key: "resources", label: "资源", icon: Package },
+] as const;
+
+const agents = ref<AgentSummary[]>([]);
+const agentId = ref("pi");
 const config = ref<AgentConfiguration | null>(null);
 const scope = ref<ConfigScope>("global");
 const projectPath = ref("");
 const activeView = ref<ViewId>("settings");
-const collapsed = ref(false);
 const jsonOpen = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 const loadError = ref("");
-const lastSavedAt = ref<string | null>(null);
 const settingsBaseline = ref("");
 const modelsBaseline = ref("");
 
 const settings = computed(() => config.value?.settings.data ?? {});
 const models = computed<ModelsConfiguration>(() => config.value?.models.data ?? { providers: {} });
-const settingsPath = computed(() => config.value?.settings.path ?? "");
-const modelsPath = computed(() => config.value?.models.path ?? "");
-const settingsHasError = computed(() =>
-  Boolean(config.value?.settings.diagnostics.some((item) => item.level === "error")),
-);
-const modelsHasError = computed(() =>
-  Boolean(config.value?.models.diagnostics.some((item) => item.level === "error")),
-);
+const diagnostics = computed(() => [
+  ...(config.value?.settings.diagnostics ?? []),
+  ...(config.value?.models.diagnostics ?? []),
+]);
+const hasBlockingError = computed(() => diagnostics.value.some((item) => item.level === "error"));
 const isDirty = computed(
   () =>
     JSON.stringify(settings.value) !== settingsBaseline.value ||
     JSON.stringify(models.value) !== modelsBaseline.value,
 );
-const currentJson = computed(() =>
-  activeView.value === "providers" ? models.value : settings.value,
+const sections = computed(() =>
+  sectionCatalog.filter(
+    (section) => config.value?.agent.capabilities.includes(section.key) ?? true,
+  ),
 );
+const isModelsView = computed(() => activeView.value === "providers");
 const currentPath = computed(() =>
-  activeView.value === "providers" ? modelsPath.value : settingsPath.value,
-);
-const currentJsonHasError = computed(() =>
-  activeView.value === "providers" ? modelsHasError.value : settingsHasError.value,
-);
-const pageTitle = computed(() =>
-  activeView.value === "settings"
-    ? "基础设置"
-    : activeView.value === "providers"
-      ? "Providers & 模型"
-      : "资源管理",
+  isModelsView.value ? (config.value?.models.path ?? "") : (config.value?.settings.path ?? ""),
 );
 
-async function loadConfiguration(nextScope = scope.value) {
+async function load(nextAgent = agentId.value, nextScope = scope.value) {
   loading.value = true;
   loadError.value = "";
   try {
     if (!projectPath.value) projectPath.value = await getDefaultProjectPath();
-    config.value = await loadPiConfiguration(nextScope, projectPath.value);
+    if (agents.value.length === 0) agents.value = await listAgents();
+    config.value = await loadConfiguration(nextAgent, nextScope, projectPath.value);
+    agentId.value = nextAgent;
     scope.value = nextScope;
     settingsBaseline.value = JSON.stringify(config.value.settings.data);
     modelsBaseline.value = JSON.stringify(config.value.models.data);
+    if (!sections.value.some((section) => section.key === activeView.value))
+      activeView.value = (sections.value[0]?.key ?? "settings") as ViewId;
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "无法连接到 Pim API";
   } finally {
@@ -84,38 +97,32 @@ async function loadConfiguration(nextScope = scope.value) {
   }
 }
 
-function changeScope(nextScope: ConfigScope) {
-  if (nextScope === scope.value) return;
-  if (isDirty.value) {
-    Modal.confirm({
-      title: "放弃未保存的修改？",
-      content: "切换配置作用域会重新读取文件，当前修改将丢失。",
-      okText: "放弃修改",
-      cancelText: "继续编辑",
-      onOk: () => loadConfiguration(nextScope),
-    });
-    return;
-  }
-  loadConfiguration(nextScope);
-}
+/** Reloading drops in-memory edits, so confirm first whenever something is unsaved. */
+function reload(nextAgent = agentId.value, nextScope = scope.value) {
+  if (!isDirty.value) return load(nextAgent, nextScope);
 
-function selectView(key: string) {
-  activeView.value = key as ViewId;
+  Modal.confirm({
+    title: "放弃未保存的修改？",
+    content: "重新读取配置文件会丢弃当前修改。",
+    okText: "放弃修改",
+    cancelText: "继续编辑",
+    onOk: () => load(nextAgent, nextScope),
+  });
 }
 
 async function save() {
-  if (!config.value || settingsHasError.value || modelsHasError.value) return;
+  if (!config.value || hasBlockingError.value) return;
   saving.value = true;
   try {
-    const settingsChanged = JSON.stringify(settings.value) !== settingsBaseline.value;
-    const modelsChanged = JSON.stringify(models.value) !== modelsBaseline.value;
     const results = [];
-    if (settingsChanged)
-      results.push(await savePiSettings(scope.value, projectPath.value, settings.value));
-    if (modelsChanged) results.push(await savePiModels(models.value));
+    if (JSON.stringify(settings.value) !== settingsBaseline.value)
+      results.push(
+        await saveSettings(agentId.value, scope.value, projectPath.value, settings.value),
+      );
+    if (JSON.stringify(models.value) !== modelsBaseline.value)
+      results.push(await saveModels(agentId.value, models.value));
     settingsBaseline.value = JSON.stringify(settings.value);
     modelsBaseline.value = JSON.stringify(models.value);
-    lastSavedAt.value = results.at(-1)?.savedAt ?? new Date().toISOString();
     message.success(results.length ? `已保存 ${results.length} 个配置文件` : "没有需要保存的修改");
     if (results.some((result) => result.backupPath)) message.info("已为原文件创建备份");
   } catch (error) {
@@ -127,151 +134,85 @@ async function save() {
 
 function applyJson(value: Record<string, unknown>) {
   if (!config.value) return;
-  if (activeView.value === "providers")
-    config.value.models.data = value as unknown as ModelsConfiguration;
+  if (isModelsView.value) config.value.models.data = value as unknown as ModelsConfiguration;
   else config.value.settings.data = value;
 }
 
-function formatTime(value: string | null) {
-  return value
-    ? new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
-    : "尚未保存";
-}
-
 watch(projectPath, (value, oldValue) => {
-  if (value !== oldValue && scope.value === "project" && value.trim()) loadConfiguration("project");
+  if (value !== oldValue && scope.value === "project" && value.trim())
+    load(agentId.value, "project");
 });
 
-onMounted(() => loadConfiguration());
+onMounted(() => load());
 </script>
 
 <template>
   <a-config-provider
     :theme="{ token: { colorPrimary: '#1677ff', borderRadius: 6, colorBgLayout: '#f5f6f8' } }"
   >
-    <a-layout class="app-layout">
-      <a-layout-sider
-        v-model:collapsed="collapsed"
-        :width="248"
-        :collapsed-width="64"
-        collapsible
-        theme="light"
-        class="app-sider"
-      >
-        <div class="sider-brand" :class="{ collapsed }">
-          <span class="brand-mark">P</span>
-          <div v-if="!collapsed"><strong>PIM</strong><span>Agent Config Studio</span></div>
-        </div>
-        <div v-if="!collapsed" class="sider-agent">
-          <a-avatar :size="34" class="agent-avatar">π</a-avatar>
-          <div><strong>Pi Agent</strong><span>本机配置</span></div>
-          <Server :size="16" />
-        </div>
-        <div v-if="!collapsed" class="sider-caption">CONFIGURATION SPACE</div>
-        <a-segmented
-          v-if="!collapsed"
-          block
-          :value="scope"
-          :options="[
-            { label: '全局配置', value: 'global' },
-            { label: '项目配置', value: 'project' },
-          ]"
-          class="sider-scope"
-          @change="(value: unknown) => changeScope(value as ConfigScope)"
-        />
-        <a-tooltip v-else title="切换配置作用域" placement="right"
-          ><a-button
-            type="text"
-            class="collapsed-scope"
-            @click="changeScope(scope === 'global' ? 'project' : 'global')"
-            ><FolderOpen :size="18" /></a-button
-        ></a-tooltip>
-        <a-menu
-          :selected-keys="[activeView]"
-          mode="inline"
-          class="sider-menu"
-          @click="({ key }: { key: string }) => selectView(key)"
-        >
-          <a-menu-item key="settings"
-            ><template #icon><Settings :size="17" /></template>基础设置</a-menu-item
-          >
-          <a-menu-item key="providers"
-            ><template #icon><SlidersHorizontal :size="17" /></template>Providers &
-            模型</a-menu-item
-          >
-          <a-menu-item key="resources"
-            ><template #icon><Package :size="17" /></template>资源管理</a-menu-item
-          >
-        </a-menu>
-        <div v-if="!collapsed" class="sider-bottom">
-          <a-space><KeyRound :size="15" /><span>认证凭据</span></a-space
-          ><a-badge
-            :count="config?.credentials.length ?? 0"
-            :number-style="{ backgroundColor: '#f0f0f0', color: '#666', boxShadow: 'none' }"
-          />
-        </div>
-        <template #trigger
-          ><PanelLeftOpen v-if="collapsed" :size="16" /><PanelLeftClose v-else :size="16"
-        /></template>
-      </a-layout-sider>
+    <div class="app-shell">
+      <AgentRail :agents="agents" :active-id="agentId" @select="(id) => reload(id, scope)" />
 
-      <a-layout>
-        <a-layout-header class="app-header">
-          <div class="header-left">
-            <a-breadcrumb
-              ><a-breadcrumb-item>PIM</a-breadcrumb-item
-              ><a-breadcrumb-item>Pi Agent</a-breadcrumb-item
-              ><a-breadcrumb-item>{{ pageTitle }}</a-breadcrumb-item></a-breadcrumb
-            >
-          </div>
-          <a-space :size="14">
+      <main class="app-main">
+        <header class="app-bar">
+          <a-segmented
+            :value="scope"
+            :options="[
+              { label: '全局', value: 'global' },
+              { label: '项目', value: 'project' },
+            ]"
+            @change="(value: unknown) => reload(agentId, value as ConfigScope)"
+          />
+          <a-input
+            v-if="scope === 'project'"
+            v-model:value="projectPath"
+            size="small"
+            class="bar-path"
+          />
+          <a-tooltip v-else :title="currentPath"
+            ><span class="bar-path-text">{{ currentPath }}</span></a-tooltip
+          >
+          <div class="bar-right">
             <a-badge
               v-if="config?.agent.available"
               status="success"
-              :text="`Pi ${config.agent.version}`"
+              :text="`${config.agent.name} ${config.agent.version}`"
             />
-            <a-badge v-else status="warning" text="未检测到 Pi CLI" />
-            <a-divider type="vertical" />
+            <a-badge v-else status="warning" :text="`未检测到 ${config?.agent.name ?? ''} CLI`" />
             <a-tooltip title="重新读取配置"
-              ><a-button type="text" shape="circle" :loading="loading" @click="loadConfiguration()"
+              ><a-button type="text" shape="circle" :loading="loading" @click="reload()"
                 ><RefreshCw :size="16" /></a-button
+            ></a-tooltip>
+            <a-tooltip title="高级 JSON"
+              ><a-button type="text" shape="circle" @click="jsonOpen = true"
+                ><Code2 :size="16" /></a-button
             ></a-tooltip>
             <a-button
               type="primary"
-              :disabled="!isDirty || Boolean(loadError) || settingsHasError || modelsHasError"
+              :disabled="!isDirty || Boolean(loadError) || hasBlockingError"
               :loading="saving"
               @click="save"
-              ><Save :size="16" />保存配置</a-button
-            >
-          </a-space>
-        </a-layout-header>
+              ><Save :size="15" />保存<span v-if="isDirty" class="bar-dirty"
+            /></a-button>
+          </div>
+        </header>
 
-        <a-layout-content class="app-content">
-          <div class="content-wrap">
-            <div class="page-header">
-              <div>
-                <a-typography-title :level="3">{{ pageTitle }}</a-typography-title
-                ><a-typography-text type="secondary">{{
-                  activeView === "settings"
-                    ? "管理 Pi 的默认行为与会话体验"
-                    : activeView === "providers"
-                      ? "配置 API 连接、模型能力与认证状态"
-                      : "管理 Pi 可加载的扩展与资源"
-                }}</a-typography-text>
-              </div>
-              <a-button :type="jsonOpen ? 'primary' : 'default'" @click="jsonOpen = true"
-                ><Code2 :size="16" />高级 JSON</a-button
-              >
-            </div>
-            <a-alert v-if="scope === 'project'" type="info" show-icon class="project-alert"
-              ><template #message>正在编辑项目配置</template
-              ><template #description
-                ><a-input v-model:value="projectPath" size="small" prefix="~" /><span
-                  class="alert-hint"
-                  >保存到该目录的 .pi/settings.json</span
-                ></template
-              ></a-alert
+        <a-tabs
+          :active-key="activeView"
+          class="app-tabs"
+          @change="(key: unknown) => (activeView = key as ViewId)"
+        >
+          <a-tab-pane v-for="section in sections" :key="section.key">
+            <template #tab
+              ><span class="tab-label"
+                ><component :is="section.icon" :size="15" />{{ section.label }}</span
+              ></template
             >
+          </a-tab-pane>
+        </a-tabs>
+
+        <section class="app-content">
+          <div class="content-wrap">
             <a-alert
               v-if="loadError"
               type="error"
@@ -281,10 +222,7 @@ onMounted(() => loadConfiguration());
               class="content-alert"
             />
             <a-alert
-              v-for="diagnostic in [
-                ...(config?.settings.diagnostics ?? []),
-                ...(config?.models.diagnostics ?? []),
-              ]"
+              v-for="diagnostic in diagnostics"
               :key="diagnostic.file + diagnostic.message"
               type="error"
               show-icon
@@ -294,7 +232,7 @@ onMounted(() => loadConfiguration());
             />
             <div v-if="loading" class="loading-state">
               <a-spin size="large" /><a-typography-text type="secondary"
-                >正在读取 Pi 配置...</a-typography-text
+                >正在读取配置...</a-typography-text
               >
             </div>
             <template v-else-if="config && !loadError">
@@ -302,20 +240,20 @@ onMounted(() => loadConfiguration());
               <ProvidersPanel
                 v-else-if="activeView === 'providers'"
                 :models="models"
+                :secret-refs="config.secretRefs"
+              />
+              <CredentialsPanel
+                v-else-if="activeView === 'credentials'"
                 :credentials="config.credentials"
+                :secret-refs="config.secretRefs"
+                :config-dir="config.agent.configDir"
               />
               <ResourcesPanel v-else :settings="settings" />
             </template>
           </div>
-        </a-layout-content>
-        <a-layout-footer class="app-footer"
-          ><a-space><CheckCircle2 :size="14" class="footer-success" />配置状态正常</a-space
-          ><span>{{ currentPath }}</span
-          ><a-space><Wrench :size="14" />仅本机服务</a-space
-          ><span>最后保存：{{ formatTime(lastSavedAt) }}</span></a-layout-footer
-        >
-      </a-layout>
-    </a-layout>
+        </section>
+      </main>
+    </div>
 
     <a-drawer
       v-model:open="jsonOpen"
@@ -325,10 +263,10 @@ onMounted(() => loadConfiguration());
       destroy-on-close
     >
       <JsonInspector
-        :value="currentJson"
-        :title="activeView === 'providers' ? 'models.json' : 'settings.json'"
+        :value="isModelsView ? models : settings"
+        :title="isModelsView ? 'models.json' : 'settings.json'"
         :path="currentPath"
-        :has-error="currentJsonHasError"
+        :has-error="hasBlockingError"
         @apply="applyJson"
       />
     </a-drawer>

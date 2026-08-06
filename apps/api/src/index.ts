@@ -7,7 +7,7 @@ import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
 import { PiAdapter } from "./adapters/pi.js";
-import type { AgentAdapter } from "./adapters/types.js";
+import type { AgentAdapter, ModelsConfiguration } from "./adapters/types.js";
 
 const app = new Hono();
 const pi = new PiAdapter();
@@ -88,11 +88,14 @@ app.put("/api/agents/:id/models", async (context) => {
   if (!body.success)
     return context.json({ error: "Invalid model configuration", details: body.error.issues }, 400);
 
-  return context.json(
-    await adapter.writeModels(
-      body.data.models as unknown as import("./adapters/types.js").ModelsConfiguration,
-    ),
-  );
+  try {
+    return context.json(
+      await adapter.writeModels(body.data.models as unknown as ModelsConfiguration),
+    );
+  } catch (error) {
+    // Literal secrets and schema violations are user input problems, not server faults.
+    return context.json({ error: error instanceof Error ? error.message : "保存失败" }, 400);
+  }
 });
 
 app.onError((error, context) => {

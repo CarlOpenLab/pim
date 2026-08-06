@@ -47,13 +47,10 @@ const retryDelay = nestedField("retry", "baseDelayMs", 2000);
 </script>
 
 <template>
-  <a-form layout="vertical" class="settings-form">
-    <a-card :bordered="false" class="settings-card">
-      <template #title><span>模型与推理</span></template>
-      <template #extra
-        ><a-typography-text type="secondary">启动与模型选择</a-typography-text></template
-      >
-      <a-row :gutter="[20, 4]">
+  <a-form layout="vertical" class="panel-stack">
+    <a-card :bordered="false" class="panel-card">
+      <template #title>模型与推理</template>
+      <a-row :gutter="[20, 0]">
         <a-col :xs="24" :md="12"
           ><a-form-item label="默认 Provider"
             ><a-input v-model:value="defaultProvider" placeholder="例如 anthropic" /></a-form-item
@@ -86,13 +83,10 @@ const retryDelay = nestedField("retry", "baseDelayMs", 2000);
       </a-row>
     </a-card>
 
-    <a-card :bordered="false" class="settings-card">
-      <template #title><span>界面与消息</span></template>
-      <template #extra
-        ><a-typography-text type="secondary">终端体验与队列行为</a-typography-text></template
-      >
-      <a-row :gutter="[20, 4]">
-        <a-col :xs="24" :md="12"
+    <a-card :bordered="false" class="panel-card">
+      <template #title>终端体验</template>
+      <a-row :gutter="[20, 0]">
+        <a-col :xs="24" :md="8"
           ><a-form-item label="终端主题"
             ><a-select v-model:value="theme"
               ><a-select-option value="dark">dark</a-select-option
@@ -100,12 +94,24 @@ const retryDelay = nestedField("retry", "baseDelayMs", 2000);
             ></a-form-item
           ></a-col
         >
-        <a-col :xs="24" :md="12"
+        <a-col :xs="24" :md="8"
           ><a-form-item label="项目默认信任"
             ><a-select v-model:value="projectTrust"
               ><a-select-option value="ask">每次询问</a-select-option
               ><a-select-option value="always">始终信任</a-select-option
               ><a-select-option value="never">从不信任</a-select-option></a-select
+            ></a-form-item
+          ></a-col
+        >
+        <a-col :xs="24" :md="8"
+          ><a-form-item label="传输方式"
+            ><a-select v-model:value="transport"
+              ><a-select-option value="auto">自动选择</a-select-option
+              ><a-select-option value="sse">SSE</a-select-option
+              ><a-select-option value="websocket">WebSocket</a-select-option
+              ><a-select-option value="websocket-cached"
+                >WebSocket Cached</a-select-option
+              ></a-select
             ></a-form-item
           ></a-col
         >
@@ -125,25 +131,12 @@ const retryDelay = nestedField("retry", "baseDelayMs", 2000);
             ></a-form-item
           ></a-col
         >
-        <a-col :xs="24" :md="12"
-          ><a-form-item label="传输方式"
-            ><a-select v-model:value="transport"
-              ><a-select-option value="auto">自动选择</a-select-option
-              ><a-select-option value="sse">SSE</a-select-option
-              ><a-select-option value="websocket">WebSocket</a-select-option
-              ><a-select-option value="websocket-cached"
-                >WebSocket Cached</a-select-option
-              ></a-select
-            ></a-form-item
-          ></a-col
-        >
       </a-row>
-      <a-divider />
       <div class="setting-list">
         <div class="setting-list-item">
           <div>
             <a-typography-text strong>安静启动</a-typography-text
-            ><a-typography-text type="secondary">隐藏 Pi 启动头部信息</a-typography-text>
+            ><a-typography-text type="secondary">隐藏启动头部信息</a-typography-text>
           </div>
           <a-switch v-model:checked="quietStartup" />
         </div>
@@ -157,68 +150,60 @@ const retryDelay = nestedField("retry", "baseDelayMs", 2000);
       </div>
     </a-card>
 
-    <a-row :gutter="16">
-      <a-col :xs="24" :lg="12">
-        <a-card :bordered="false" class="settings-card compact-card">
-          <template #title>上下文压缩</template>
-          <template #extra><a-switch v-model:checked="compactionEnabled" /></template>
-          <a-typography-text type="secondary" class="card-help"
-            >长会话接近上下文上限时自动压缩。</a-typography-text
-          >
-          <a-form-item label="响应保留 Token"
+    <a-card :bordered="false" class="panel-card">
+      <template #title>会话与隐私</template>
+      <div class="setting-list">
+        <div class="setting-list-item">
+          <div>
+            <a-typography-text strong>上下文压缩</a-typography-text
+            ><a-typography-text type="secondary">接近上下文上限时自动压缩</a-typography-text>
+          </div>
+          <a-space :size="12"
             ><a-input-number
               v-model:value="reserveTokens"
               :min="0"
               :step="1024"
               :disabled="!compactionEnabled"
-          /></a-form-item>
-          <a-form-item label="近期保留 Token"
-            ><a-input-number
+              addon-before="响应保留"
+              class="inline-number" /><a-input-number
               v-model:value="keepRecentTokens"
               :min="0"
               :step="1024"
               :disabled="!compactionEnabled"
-          /></a-form-item>
-        </a-card>
-      </a-col>
-      <a-col :xs="24" :lg="12">
-        <a-card :bordered="false" class="settings-card compact-card">
-          <template #title>失败重试</template>
-          <template #extra><a-switch v-model:checked="retryEnabled" /></template>
-          <a-typography-text type="secondary" class="card-help"
-            >只处理临时性错误。</a-typography-text
-          >
-          <a-form-item label="最大重试次数"
+              addon-before="近期保留"
+              class="inline-number" /><a-switch v-model:checked="compactionEnabled"
+          /></a-space>
+        </div>
+        <div class="setting-list-item">
+          <div>
+            <a-typography-text strong>失败重试</a-typography-text
+            ><a-typography-text type="secondary">只处理临时性错误</a-typography-text>
+          </div>
+          <a-space :size="12"
             ><a-input-number
               v-model:value="maxRetries"
               :min="0"
               :max="20"
               :disabled="!retryEnabled"
-          /></a-form-item>
-          <a-form-item label="基础延迟 (ms)"
-            ><a-input-number
+              addon-before="次数"
+              class="inline-number" /><a-input-number
               v-model:value="retryDelay"
               :min="0"
               :step="500"
               :disabled="!retryEnabled"
-          /></a-form-item>
-        </a-card>
-      </a-col>
-    </a-row>
-
-    <a-card :bordered="false" class="settings-card">
-      <template #title>隐私</template>
-      <template #extra
-        ><a-typography-text type="secondary">Pi 遥测选项</a-typography-text></template
-      >
-      <div class="setting-list-item">
-        <div>
-          <a-typography-text strong>安装与更新遥测</a-typography-text
-          ><a-typography-text type="secondary"
-            >发送匿名 Pi 版本信息；不影响版本检查</a-typography-text
-          >
+              addon-before="延迟 ms"
+              class="inline-number" /><a-switch v-model:checked="retryEnabled"
+          /></a-space>
         </div>
-        <a-switch v-model:checked="telemetry" />
+        <div class="setting-list-item">
+          <div>
+            <a-typography-text strong>安装与更新遥测</a-typography-text
+            ><a-typography-text type="secondary"
+              >发送匿名版本信息；不影响版本检查</a-typography-text
+            >
+          </div>
+          <a-switch v-model:checked="telemetry" />
+        </div>
       </div>
     </a-card>
   </a-form>

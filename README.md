@@ -11,7 +11,27 @@ PIM is a local-first configuration studio for terminal Agent harnesses. The firs
 - Structured forms plus an advanced JSON editor
 - JSONC reads, schema validation, atomic writes, and timestamped backups
 
-PIM binds its API to `127.0.0.1`. It does not expose credential plaintext to the browser. Literal keys and headers from `models.json` are represented by `__PIM_REDACTED__` and restored by the API when the configuration is saved.
+## Secrets
+
+PIM configures models — it never handles keys. Configuration files only hold a `$VAR_NAME`
+reference; the agent reads that variable from its own environment when it authenticates, so the
+plaintext only ever lives in the agent process.
+
+- The forms only produce references, and `apps/api/src/secret-ref.ts` rejects literal `apiKey`,
+  `oauth`, and header values on write — including anything typed into the advanced JSON editor.
+- Literal values already present on disk are sent to the browser as `__PIM_REDACTED__`, restored
+  on save by the API, and flagged in the UI with a one-click switch to a reference.
+- `secretRefs` in the configuration payload reports which variables a configuration needs and
+  whether they exist in the PIM process environment — a boolean, never a value.
+
+PIM binds its API to `127.0.0.1`.
+
+## Adding an agent
+
+`AgentAdapter` (`apps/api/src/adapters/types.ts`) is the only thing an agent needs. Implement it
+next to `pi.ts`, register it in the `adapters` map in `apps/api/src/index.ts`, and declare its
+`capabilities` — the UI derives the agent rail and its tabs from `GET /api/agents`, so no frontend
+change is required.
 
 ## Development
 

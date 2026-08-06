@@ -45,7 +45,7 @@ function addResource(key: string) {
 </script>
 
 <template>
-  <a-card :bordered="false" class="resources-card">
+  <a-card :bordered="false" class="panel-card">
     <a-alert type="info" show-icon class="resource-info"
       ><template #message>资源路径解析规则</template
       ><template #description

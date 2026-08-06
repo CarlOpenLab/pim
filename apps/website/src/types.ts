@@ -1,5 +1,9 @@
+export type AgentId = "pi" | "omp";
 export type ConfigScope = "global" | "project";
-export type ViewId = "settings" | "providers" | "resources";
+export type ViewId = "settings" | "providers" | "credentials" | "resources";
+
+/** Sentinel the API sends in place of a literal secret it found on disk. */
+export const REDACTED = "__PIM_REDACTED__";
 
 export interface Diagnostic {
   level: "error" | "warning";
@@ -8,7 +12,7 @@ export interface Diagnostic {
 }
 
 export interface AgentSummary {
-  id: "pi";
+  id: AgentId;
   name: string;
   description: string;
   available: boolean;
@@ -30,6 +34,12 @@ export interface CredentialStatus {
   type: string;
   configured: boolean;
   environmentKeys: string[];
+}
+
+export interface SecretReference {
+  name: string;
+  present: boolean;
+  usedBy: string[];
 }
 
 export interface ModelConfiguration {
@@ -63,6 +73,7 @@ export interface AgentConfiguration {
   settings: ConfigDocument<Record<string, unknown>>;
   models: ConfigDocument<ModelsConfiguration>;
   credentials: CredentialStatus[];
+  secretRefs: SecretReference[];
 }
 
 export interface SaveResult {

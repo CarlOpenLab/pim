@@ -22,6 +22,16 @@ export interface CredentialStatus {
   environmentKeys: string[];
 }
 
+/**
+ * A `$VAR_NAME` reference found in a configuration file. PIM never reads or stores the
+ * value — `present` only reports whether the variable exists in the PIM process environment.
+ */
+export interface SecretReference {
+  name: string;
+  present: boolean;
+  usedBy: string[];
+}
+
 export interface AgentSummary {
   id: AgentId;
   name: string;
@@ -39,6 +49,7 @@ export interface AgentConfiguration {
   settings: ConfigDocument<Record<string, unknown>>;
   models: ConfigDocument<ModelsConfiguration>;
   credentials: CredentialStatus[];
+  secretRefs: SecretReference[];
 }
 
 export interface ModelsConfiguration {

@@ -1,4 +1,10 @@
-import type { AgentConfiguration, ConfigScope, ModelsConfiguration, SaveResult } from "./types.ts";
+import type {
+  AgentConfiguration,
+  AgentSummary,
+  ConfigScope,
+  ModelsConfiguration,
+  SaveResult,
+} from "./types.ts";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -18,27 +24,34 @@ export async function getDefaultProjectPath(): Promise<string> {
   return health.projectPath;
 }
 
-export function loadPiConfiguration(
+export async function listAgents(): Promise<AgentSummary[]> {
+  const payload = await request<{ agents: AgentSummary[] }>("/api/agents");
+  return payload.agents;
+}
+
+export function loadConfiguration(
+  agentId: string,
   scope: ConfigScope,
   projectPath: string,
 ): Promise<AgentConfiguration> {
   const params = new URLSearchParams({ scope, projectPath });
-  return request(`/api/agents/pi/configuration?${params.toString()}`);
+  return request(`/api/agents/${agentId}/configuration?${params.toString()}`);
 }
 
-export function savePiSettings(
+export function saveSettings(
+  agentId: string,
   scope: ConfigScope,
   projectPath: string,
   settings: Record<string, unknown>,
 ): Promise<SaveResult> {
-  return request("/api/agents/pi/settings", {
+  return request(`/api/agents/${agentId}/settings`, {
     method: "PUT",
     body: JSON.stringify({ scope, projectPath, settings }),
   });
 }
 
-export function savePiModels(models: ModelsConfiguration): Promise<SaveResult> {
-  return request("/api/agents/pi/models", {
+export function saveModels(agentId: string, models: ModelsConfiguration): Promise<SaveResult> {
+  return request(`/api/agents/${agentId}/models`, {
     method: "PUT",
     body: JSON.stringify({ models }),
   });

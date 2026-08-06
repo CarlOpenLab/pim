@@ -3,6 +3,12 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import {
+  assertNoLiteralSecrets,
+  collectSecretReferences,
+  isSecretPlaceholder,
+  REDACTED,
+} from "../secret-ref.js";
 import { readJsonDocument, writeJsonAtomic } from "./json-file.js";
 import type {
   AgentAdapter,
@@ -15,7 +21,6 @@ import type {
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
-const redacted = "__PIM_REDACTED__";
 
 const thinkingLevel = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const settingsSchema = z
@@ -91,10 +96,6 @@ function projectRoot(path: string): string {
   return normalized;
 }
 
-function isSecretReference(value: string): boolean {
-  return value.startsWith("$") || value.startsWith("!");
-}
-
 function sanitizeSecrets(value: unknown, parentKey?: string): unknown {
   if (Array.isArray(value)) return value.map((item) => sanitizeSecrets(item, parentKey));
   if (!value || typeof value !== "object") return value;
@@ -103,15 +104,15 @@ function sanitizeSecrets(value: unknown, parentKey?: string): unknown {
     Object.entries(value).map(([key, item]) => {
       const isSensitiveString =
         typeof item === "string" &&
-        (key === "apiKey" || parentKey === "headers") &&
-        !isSecretReference(item);
-      return [key, isSensitiveString ? redacted : sanitizeSecrets(item, key)];
+        (key === "apiKey" || key === "oauth" || parentKey === "headers") &&
+        !isSecretPlaceholder(item);
+      return [key, isSensitiveString ? REDACTED : sanitizeSecrets(item, key)];
     }),
   );
 }
 
 function restoreRedactions(next: unknown, previous: unknown): unknown {
-  if (next === redacted) return previous ?? next;
+  if (next === REDACTED) return previous ?? next;
   if (Array.isArray(next)) {
     const previousItems = Array.isArray(previous) ? previous : [];
     return next.map((item, index) => restoreRedactions(item, previousItems[index]));
@@ -197,6 +198,7 @@ export class PiAdapter implements AgentAdapter {
       settings,
       models: { ...models, data: sanitizeModels(models.data) },
       credentials,
+      secretRefs: collectSecretReferences(models.data),
     };
   }
 
@@ -216,6 +218,7 @@ export class PiAdapter implements AgentAdapter {
 
   async writeModels(value: ModelsConfiguration): Promise<SaveResult> {
     const parsed = modelsSchema.parse(value) as ModelsConfiguration;
+    assertNoLiteralSecrets(parsed);
     const path = join(this.configDir, "models.json");
     const previous = await readJsonDocument(path, { providers: {} }, (input) =>
       modelsSchema.parse(input),

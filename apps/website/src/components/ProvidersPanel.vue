@@ -1,25 +1,49 @@
 <script setup lang="ts">
-import { KeyRound, Plus, Server, Trash2 } from "@lucide/vue";
+import { Plus, Trash2, TriangleAlert } from "@lucide/vue";
 import message from "antdv-next/dist/message/index";
 import { computed, ref, watch } from "vue";
-import type { CredentialStatus, ModelConfiguration, ModelsConfiguration } from "../types.ts";
+import {
+  type ModelConfiguration,
+  type ModelsConfiguration,
+  REDACTED,
+  type SecretReference,
+} from "../types.ts";
 
-const props = defineProps<{ models: ModelsConfiguration; credentials: CredentialStatus[] }>();
+const props = defineProps<{ models: ModelsConfiguration; secretRefs: SecretReference[] }>();
 const selectedId = ref("");
-const addProviderOpen = ref(false);
-const providerIdDraft = ref("");
+const addOpen = ref(false);
+const draftId = ref("");
 const modelColumns = [
-  { title: "模型 ID", key: "id", width: 190 },
-  { title: "显示名称", key: "name", width: 170 },
+  { title: "模型 ID", key: "id", width: 200 },
+  { title: "显示名称", key: "name", width: 160 },
   { title: "上下文窗口", key: "context", width: 130 },
-  { title: "能力", key: "capabilities", width: 140 },
+  { title: "能力", key: "capabilities", width: 130 },
   { title: "", key: "actions", width: 48 },
 ];
 
 const providerIds = computed(() => Object.keys(props.models.providers).sort());
 const provider = computed(() => props.models.providers[selectedId.value]);
-const credential = computed(() =>
-  props.credentials.find((item) => item.provider === selectedId.value),
+
+/**
+ * The form only ever produces a `$VAR_NAME` reference. The agent reads that variable from
+ * its own environment when it authenticates, so no key is ever written to models.json.
+ */
+const keyVariable = computed<string>({
+  get: () => {
+    const value = provider.value?.apiKey ?? "";
+    return value.startsWith("$") ? value.slice(1) : "";
+  },
+  set: (value) => {
+    if (!provider.value) return;
+    const name = value.replaceAll(/[^A-Za-z0-9_]/g, "_").toUpperCase();
+    if (name) provider.value.apiKey = `$${name}`;
+    else delete provider.value.apiKey;
+  },
+});
+const hasLiteralKey = computed(() => provider.value?.apiKey === REDACTED);
+const isCommandKey = computed(() => provider.value?.apiKey?.startsWith("!") ?? false);
+const keyStatus = computed(() =>
+  props.secretRefs.find((reference) => reference.name === keyVariable.value),
 );
 
 watch(
@@ -31,7 +55,7 @@ watch(
 );
 
 function addProvider() {
-  const id = providerIdDraft.value.trim();
+  const id = draftId.value.trim();
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id)) {
     message.error("Provider ID 只能包含字母、数字、点、斜杠、下划线或连字符");
     return;
@@ -42,12 +66,18 @@ function addProvider() {
   }
   props.models.providers[id] = { api: "openai-completions", models: [] };
   selectedId.value = id;
-  providerIdDraft.value = "";
-  addProviderOpen.value = false;
+  draftId.value = "";
+  addOpen.value = false;
 }
 
 function removeProvider() {
   delete props.models.providers[selectedId.value];
+}
+
+/** Drops the literal value so the next save writes a reference instead. */
+function convertLiteralKey() {
+  if (!provider.value) return;
+  provider.value.apiKey = `$${selectedId.value.replaceAll(/[^A-Za-z0-9_]/g, "_").toUpperCase()}_API_KEY`;
 }
 
 function addModel() {
@@ -73,68 +103,42 @@ function modelRowKey(model: ModelConfiguration) {
 </script>
 
 <template>
-  <a-card :bordered="false" class="provider-card" :body-style="{ padding: 0 }">
-    <div class="provider-workbench">
-      <aside class="provider-navigation">
-        <div class="provider-nav-header">
-          <div>
-            <a-typography-text strong>自定义 Provider</a-typography-text
-            ><a-typography-text type="secondary">{{ providerIds.length }} 个配置</a-typography-text>
-          </div>
-          <a-tooltip title="添加 Provider"
-            ><a-button type="text" shape="circle" @click="addProviderOpen = true"
-              ><Plus :size="17" /></a-button
-          ></a-tooltip>
-        </div>
-        <a-menu
-          :selected-keys="selectedId ? [selectedId] : []"
-          mode="inline"
-          class="provider-menu"
-          @click="({ key }: { key: string }) => (selectedId = key)"
-        >
-          <a-menu-item v-for="id in providerIds" :key="id"
-            ><template #icon><Server :size="16" /></template
-            ><span class="provider-menu-label">{{ id }}</span
-            ><a-badge v-if="credentials.some((item) => item.provider === id)" status="success"
-          /></a-menu-item>
-        </a-menu>
-        <div class="credential-panel">
-          <a-divider orientation="left" plain>认证状态</a-divider>
-          <a-space v-for="item in credentials" :key="item.provider" class="credential-item"
-            ><KeyRound :size="14" /><a-typography-text code>{{ item.provider }}</a-typography-text
-            ><a-tag color="success">{{ item.type }}</a-tag></a-space
-          >
-          <a-typography-text v-if="credentials.length === 0" type="secondary"
-            >未发现 auth.json 凭据</a-typography-text
-          >
-        </div>
-      </aside>
+  <div class="panel-stack">
+    <div class="provider-switch">
+      <a-segmented
+        v-if="providerIds.length"
+        :value="selectedId"
+        :options="providerIds"
+        @change="(value: unknown) => (selectedId = value as string)"
+      />
+      <a-button type="dashed" @click="addOpen = true"><Plus :size="15" />添加 Provider</a-button>
+    </div>
 
-      <section v-if="provider" class="provider-content">
-        <div class="provider-title-row">
-          <div>
-            <a-space
-              ><a-avatar shape="square" class="provider-avatar">{{
-                selectedId.slice(0, 2).toUpperCase()
-              }}</a-avatar>
-              <div>
-                <a-space
-                  ><a-typography-title :level="4">{{ selectedId }}</a-typography-title
-                  ><a-tag v-if="credential" color="success">已认证</a-tag
-                  ><a-tag v-else>未认证</a-tag></a-space
-                ><a-typography-text type="secondary">配置写入全局 models.json</a-typography-text>
-              </div></a-space
-            >
-          </div>
-          <a-popconfirm
+    <template v-if="provider">
+      <a-card :bordered="false" class="panel-card">
+        <template #title>{{ selectedId }}</template>
+        <template #extra
+          ><a-popconfirm
             title="确定删除这个 Provider？"
             ok-text="删除"
             cancel-text="取消"
             @confirm="removeProvider"
-            ><a-button danger><Trash2 :size="16" />删除</a-button></a-popconfirm
+            ><a-button type="text" danger size="small"
+              ><Trash2 :size="15" />删除</a-button
+            ></a-popconfirm
+          ></template
+        >
+        <a-alert v-if="hasLiteralKey" type="warning" show-icon class="key-alert">
+          <template #message>配置文件里存在明文密钥</template>
+          <template #description
+            >PIM 不保存密钥值。点「改用变量」会把它换成一个环境变量引用，保存后原明文将从
+            models.json 中移除（仍会留在 .pim/backups 的备份里），请先确认你已经把这个值导出到 shell
+            环境。</template
           >
-        </div>
-        <a-divider />
+          <template #action
+            ><a-button size="small" @click="convertLiteralKey">改用变量</a-button></template
+          >
+        </a-alert>
         <a-form layout="vertical">
           <a-row :gutter="20">
             <a-col :span="24"
@@ -156,28 +160,47 @@ function modelRowKey(model: ModelConfiguration) {
                 ></a-form-item
               ></a-col
             >
-            <a-col :xs="24" :md="12"
-              ><a-form-item
-                label="API Key / 引用"
-                extra="支持环境变量、!command 或字面值；字面值读取后会脱敏"
-                ><a-input-password
-                  v-model:value="provider.apiKey"
-                  placeholder="$PROVIDER_API_KEY" /></a-form-item
-            ></a-col>
+            <a-col :xs="24" :md="12">
+              <a-form-item label="API Key 环境变量">
+                <a-input
+                  v-if="!isCommandKey"
+                  v-model:value="keyVariable"
+                  addon-before="$"
+                  placeholder="PI_OPENAI_API_KEY"
+                  :disabled="hasLiteralKey"
+                />
+                <a-input v-else :value="provider.apiKey" disabled />
+                <template #extra>
+                  <span v-if="isCommandKey">命令引用，如需修改请使用高级 JSON。</span>
+                  <span v-else-if="!keyVariable">留空表示该 Provider 不需要密钥。</span>
+                  <span v-else-if="keyStatus?.present">
+                    <a-tag color="success">环境变量已就绪</a-tag>Agent 启动时会自行读取它去授权。
+                  </span>
+                  <span v-else>
+                    <TriangleAlert :size="12" /> 当前 PIM 进程里没有这个变量，记得在启动 Agent 的
+                    shell 里 export。
+                  </span>
+                </template>
+              </a-form-item>
+            </a-col>
           </a-row>
         </a-form>
-        <a-divider orientation="left">模型目录</a-divider>
-        <div class="table-toolbar">
-          <a-typography-text type="secondary">模型 ID 会原样发送给上游 API</a-typography-text
-          ><a-button type="primary" ghost @click="addModel"><Plus :size="16" />添加模型</a-button>
-        </div>
+      </a-card>
+
+      <a-card :bordered="false" class="panel-card" :body-style="{ paddingTop: '12px' }">
+        <template #title>模型目录</template>
+        <template #extra
+          ><a-button type="primary" ghost size="small" @click="addModel"
+            ><Plus :size="15" />添加模型</a-button
+          ></template
+        >
         <a-table
           :columns="modelColumns"
           :data-source="provider.models ?? []"
           :pagination="false"
           :row-key="modelRowKey"
           size="middle"
-          :scroll="{ x: 720 }"
+          :scroll="{ x: 700 }"
         >
           <template #bodyCell="{ column, record }">
             <a-input v-if="column.key === 'id'" v-model:value="record.id" placeholder="model-id" />
@@ -192,7 +215,7 @@ function modelRowKey(model: ModelConfiguration) {
               :min="1"
               placeholder="128000"
             />
-            <a-space v-else-if="column.key === 'capabilities'" direction="vertical" :size="4"
+            <a-space v-else-if="column.key === 'capabilities'" :size="10"
               ><a-checkbox v-model:checked="record.reasoning">推理</a-checkbox
               ><a-checkbox
                 :checked="record.input?.includes('image')"
@@ -210,30 +233,28 @@ function modelRowKey(model: ModelConfiguration) {
           </template>
           <template #emptyText><a-empty description="尚未添加模型" /></template>
         </a-table>
-      </section>
-      <section v-else class="provider-empty">
-        <a-empty description="添加 Provider 后开始配置"
-          ><a-button type="primary" @click="addProviderOpen = true"
-            ><Plus :size="16" />添加 Provider</a-button
-          ></a-empty
-        >
-      </section>
-    </div>
-  </a-card>
+      </a-card>
+    </template>
 
-  <a-modal
-    v-model:open="addProviderOpen"
-    title="添加 Provider"
-    ok-text="添加"
-    cancel-text="取消"
-    @ok="addProvider"
-  >
-    <a-form layout="vertical"
-      ><a-form-item label="Provider ID" extra="例如 ollama 或 company-proxy"
-        ><a-input
-          v-model:value="providerIdDraft"
-          autofocus
-          @press-enter="addProvider" /></a-form-item
-    ></a-form>
-  </a-modal>
+    <a-card v-else :bordered="false" class="panel-card panel-empty">
+      <a-empty description="添加 Provider 后开始配置模型"
+        ><a-button type="primary" @click="addOpen = true"
+          ><Plus :size="16" />添加 Provider</a-button
+        ></a-empty
+      >
+    </a-card>
+
+    <a-modal
+      v-model:open="addOpen"
+      title="添加 Provider"
+      ok-text="添加"
+      cancel-text="取消"
+      @ok="addProvider"
+    >
+      <a-form layout="vertical"
+        ><a-form-item label="Provider ID" extra="例如 ollama 或 company-proxy"
+          ><a-input v-model:value="draftId" autofocus @press-enter="addProvider" /></a-form-item
+      ></a-form>
+    </a-modal>
+  </div>
 </template>
