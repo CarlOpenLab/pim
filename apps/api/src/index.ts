@@ -35,6 +35,26 @@ const modelsRequestSchema = z.object({
   models: z.object({ providers: z.record(z.string(), z.unknown()) }).loose(),
 });
 
+function formatPath(path: readonly PropertyKey[]): string {
+  return path.reduce<string>((text, key) => {
+    if (typeof key === "number") return `${text}[${key}]`;
+    return text ? `${text}.${String(key)}` : String(key);
+  }, "");
+}
+
+/**
+ * Zod's own message is a JSON dump of every issue, which ends up in a toast unreadable.
+ * The UI validates the same rules first, so this is the backstop for the JSON editor.
+ */
+function describeIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = formatPath(issue.path);
+      return path ? `${path}：${issue.message}` : issue.message;
+    })
+    .join("；");
+}
+
 app.use("*", logger());
 app.use("*", secureHeaders());
 app.use(
@@ -72,12 +92,23 @@ app.put("/api/agents/:id/settings", async (context) => {
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
 
   const body = settingsRequestSchema.safeParse(await context.req.json());
-  if (!body.success)
-    return context.json({ error: "Invalid settings", details: body.error.issues }, 400);
+  if (!body.success) return context.json({ error: describeIssues(body.error) }, 400);
 
-  return context.json(
-    await adapter.writeSettings(body.data.scope, body.data.projectPath, body.data.settings),
-  );
+  try {
+    return context.json(
+      await adapter.writeSettings(body.data.scope, body.data.projectPath, body.data.settings),
+    );
+  } catch (error) {
+    if (error instanceof z.ZodError) return context.json({ error: describeIssues(error) }, 400);
+    throw error;
+  }
+});
+
+app.get("/api/agents/:id/model-presets", async (context) => {
+  const adapter = adapters.get(context.req.param("id"));
+  if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
+
+  return context.json({ presets: (await adapter.modelPresets?.()) ?? [] });
 });
 
 app.put("/api/agents/:id/models", async (context) => {
@@ -85,8 +116,7 @@ app.put("/api/agents/:id/models", async (context) => {
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
 
   const body = modelsRequestSchema.safeParse(await context.req.json());
-  if (!body.success)
-    return context.json({ error: "Invalid model configuration", details: body.error.issues }, 400);
+  if (!body.success) return context.json({ error: describeIssues(body.error) }, 400);
 
   try {
     return context.json(
@@ -94,6 +124,7 @@ app.put("/api/agents/:id/models", async (context) => {
     );
   } catch (error) {
     // Literal secrets and schema violations are user input problems, not server faults.
+    if (error instanceof z.ZodError) return context.json({ error: describeIssues(error) }, 400);
     return context.json({ error: error instanceof Error ? error.message : "保存失败" }, 400);
   }
 });

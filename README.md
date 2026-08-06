@@ -5,7 +5,9 @@ PIM is a local-first configuration studio for terminal Agent harnesses. The firs
 ## Current scope
 
 - Global and project-scoped Pi `settings.json`
-- Custom providers and models in `models.json`
+- Custom providers and models in `models.json`, including per-model context window, output cap,
+  API shape, capabilities, per-million-token pricing, and provider-specific `compat` switches
+- Provider templates so a new provider or model starts from a working baseline
 - Credential status from `auth.json` without returning secret values
 - Extensions, skills, prompt templates, themes, and package paths
 - Structured forms plus an advanced JSON editor
@@ -26,12 +28,27 @@ plaintext only ever lives in the agent process.
 
 PIM binds its API to `127.0.0.1`.
 
+## Model presets
+
+`apps/api/src/presets/pi.ts` holds the provider templates served by
+`GET /api/agents/:id/model-presets`. They are a starting point, not a source of truth: the
+connection fields are the durable part, while model IDs and prices move whenever a vendor ships,
+so the UI tells the user to verify whatever it imported. A preset never carries a key value — only
+a `$VAR_NAME` reference, which `apps/api/tests/model-presets.test.ts` asserts along with the write
+schema.
+
+Editing happens in two places. The model table covers the fields worth scanning across a catalog;
+the per-model drawer covers everything else, with `compat` left as a JSON field because its keys
+are provider-specific. `apps/website/src/model-validation.ts` runs the same rules the API enforces
+on write, so an incomplete row is pointed at in place instead of coming back as a schema error.
+
 ## Adding an agent
 
 `AgentAdapter` (`apps/api/src/adapters/types.ts`) is the only thing an agent needs. Implement it
 next to `pi.ts`, register it in the `adapters` map in `apps/api/src/index.ts`, and declare its
 `capabilities` — the UI derives the agent rail and its tabs from `GET /api/agents`, so no frontend
-change is required.
+change is required. `modelPresets` is optional; an adapter that omits it just gets a manual-only
+add flow.
 
 ## Development
 

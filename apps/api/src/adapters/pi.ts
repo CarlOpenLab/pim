@@ -9,6 +9,7 @@ import {
   isSecretPlaceholder,
   REDACTED,
 } from "../secret-ref.js";
+import { piModelPresets } from "../presets/pi.js";
 import { readJsonDocument, writeJsonAtomic } from "./json-file.js";
 import type {
   AgentAdapter,
@@ -17,6 +18,7 @@ import type {
   ConfigScope,
   CredentialStatus,
   ModelsConfiguration,
+  ProviderPreset,
   SaveResult,
 } from "./types.js";
 
@@ -56,14 +58,15 @@ const settingsSchema = z
   })
   .loose();
 
+// Messages are user facing: the advanced JSON editor surfaces them verbatim in a toast.
 const modelSchema = z
   .object({
-    id: z.string().min(1),
+    id: z.string().min(1, "模型 ID 不能为空"),
     name: z.string().optional(),
     reasoning: z.boolean().optional(),
     input: z.array(z.enum(["text", "image"])).optional(),
-    contextWindow: z.number().int().positive().optional(),
-    maxTokens: z.number().int().positive().optional(),
+    contextWindow: z.number("上下文窗口需要是正整数").int().positive().optional(),
+    maxTokens: z.number("最大输出需要是正整数").int().positive().optional(),
   })
   .loose();
 
@@ -225,4 +228,11 @@ export class PiAdapter implements AgentAdapter {
     );
     return writeJsonAtomic(path, restoreSecrets(parsed, previous.data));
   }
+
+  async modelPresets(): Promise<ProviderPreset[]> {
+    return piModelPresets;
+  }
 }
+
+/** Exported so a test can assert every shipped preset still satisfies the write schema. */
+export const piModelsSchema = modelsSchema;

@@ -42,24 +42,51 @@ export interface SecretReference {
   usedBy: string[];
 }
 
+export type ProviderApi =
+  | "openai-completions"
+  | "openai-responses"
+  | "anthropic-messages"
+  | "google-generative-ai";
+
+/** US dollars per million tokens, matching what Pi reads out of models.json. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  [key: string]: unknown;
+}
+
 export interface ModelConfiguration {
   id: string;
   name?: string;
+  api?: ProviderApi;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
   contextWindow?: number;
   maxTokens?: number;
+  cost?: ModelCost;
+  compat?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
 export interface ProviderConfiguration {
   baseUrl?: string;
-  api?: "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
+  api?: ProviderApi;
   apiKey?: string;
   authHeader?: boolean;
   models?: ModelConfiguration[];
   headers?: Record<string, string>;
   [key: string]: unknown;
+}
+
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  description: string;
+  docsUrl?: string;
+  provider: Omit<ProviderConfiguration, "models">;
+  models: ModelConfiguration[];
 }
 
 export interface ModelsConfiguration {

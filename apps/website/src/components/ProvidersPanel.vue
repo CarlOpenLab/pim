@@ -1,28 +1,65 @@
 <script setup lang="ts">
-import { Plus, Trash2, TriangleAlert } from "@lucide/vue";
+import { ExternalLink, Pencil, Plus, Sparkles, Trash2, TriangleAlert } from "@lucide/vue";
 import message from "antdv-next/dist/message/index";
 import { computed, ref, watch } from "vue";
+import type { ModelIssue } from "../model-validation.ts";
+import ModelEditor from "./ModelEditor.vue";
 import {
   type ModelConfiguration,
   type ModelsConfiguration,
+  type ProviderPreset,
   REDACTED,
   type SecretReference,
 } from "../types.ts";
 
-const props = defineProps<{ models: ModelsConfiguration; secretRefs: SecretReference[] }>();
+const props = defineProps<{
+  models: ModelsConfiguration;
+  secretRefs: SecretReference[];
+  presets: ProviderPreset[];
+  issues: ModelIssue[];
+}>();
 const selectedId = ref("");
 const addOpen = ref(false);
+const addMode = ref<"preset" | "manual">("preset");
 const draftId = ref("");
+const draftPresetId = ref("");
+const importOpen = ref(false);
+const importPresetId = ref("");
+const importSelection = ref<string[]>([]);
+const editing = ref<ModelConfiguration | null>(null);
 const modelColumns = [
-  { title: "模型 ID", key: "id", width: 200 },
-  { title: "显示名称", key: "name", width: 160 },
+  { title: "模型 ID", key: "id", width: 210 },
+  { title: "显示名称", key: "name", width: 150 },
   { title: "上下文窗口", key: "context", width: 130 },
-  { title: "能力", key: "capabilities", width: 130 },
-  { title: "", key: "actions", width: 48 },
+  { title: "能力", key: "capabilities", width: 155 },
+  { title: "计费", key: "cost", width: 105 },
+  { title: "", key: "actions", width: 84 },
 ];
 
 const providerIds = computed(() => Object.keys(props.models.providers).sort());
 const provider = computed(() => props.models.providers[selectedId.value]);
+const providerIssues = computed(() =>
+  props.issues.filter((issue) => issue.providerId === selectedId.value),
+);
+const providerLevelIssues = computed(() =>
+  providerIssues.value.filter((issue) => issue.modelIndex === null),
+);
+const presetsWithModels = computed(() =>
+  props.presets.filter((preset) => preset.models.length > 0),
+);
+const importPreset = computed(() =>
+  presetsWithModels.value.find((preset) => preset.id === importPresetId.value),
+);
+const existingModelIds = computed(
+  () => new Set((provider.value?.models ?? []).map((model) => model.id)),
+);
+const editingIssues = computed(() => {
+  const index = editing.value ? (provider.value?.models?.indexOf(editing.value) ?? -1) : -1;
+  if (index < 0) return [];
+  return providerIssues.value
+    .filter((issue) => issue.modelIndex === index)
+    .map((issue) => issue.message);
+});
 
 /**
  * The form only ever produces a `$VAR_NAME` reference. The agent reads that variable from
@@ -54,20 +91,67 @@ watch(
   { immediate: true },
 );
 
-function addProvider() {
-  const id = draftId.value.trim();
+watch(addOpen, (open) => {
+  if (!open) return;
+  addMode.value = props.presets.length > 0 ? "preset" : "manual";
+  draftPresetId.value = props.presets[0]?.id ?? "";
+  draftId.value = "";
+});
+
+watch(importOpen, (open) => {
+  if (!open) return;
+  const matching = presetsWithModels.value.find((preset) => preset.id === selectedId.value);
+  importPresetId.value = (matching ?? presetsWithModels.value[0])?.id ?? "";
+  importSelection.value = [];
+});
+
+watch(importPresetId, () => {
+  importSelection.value = [];
+});
+
+/**
+ * Presets arrive as reactive proxies, which `structuredClone` refuses to copy. Everything
+ * here is plain JSON, so a round trip both detaches the copy and drops the proxy.
+ */
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function createProvider(id: string, value: ModelsConfiguration["providers"][string]): boolean {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id)) {
     message.error("Provider ID 只能包含字母、数字、点、斜杠、下划线或连字符");
-    return;
+    return false;
   }
   if (props.models.providers[id]) {
     message.error("该 Provider 已存在");
-    return;
+    return false;
   }
-  props.models.providers[id] = { api: "openai-completions", models: [] };
+
+  props.models.providers[id] = value;
   selectedId.value = id;
-  draftId.value = "";
   addOpen.value = false;
+  return true;
+}
+
+function addProvider() {
+  createProvider(draftId.value.trim(), { api: "openai-completions", models: [] });
+}
+
+function addProviderFromPreset() {
+  const preset = props.presets.find((item) => item.id === draftPresetId.value);
+  if (!preset) return;
+
+  const id = draftId.value.trim() || preset.id;
+  const created = createProvider(id, {
+    ...clone(preset.provider),
+    models: clone(preset.models),
+  });
+  if (created)
+    message.success(
+      preset.models.length
+        ? `已导入 ${preset.label}，含 ${preset.models.length} 个模型，请核对参数与价格`
+        : `已导入 ${preset.label} 的连接信息，请自行添加模型`,
+    );
 }
 
 function removeProvider() {
@@ -82,12 +166,31 @@ function convertLiteralKey() {
 
 function addModel() {
   if (!provider.value) return;
-  (provider.value.models ??= []).push({ id: "", input: ["text"], reasoning: false });
+  const model: ModelConfiguration = { id: "", input: ["text"], reasoning: false };
+  (provider.value.models ??= []).push(model);
+  editing.value = model;
+}
+
+function importModels() {
+  if (!provider.value || !importPreset.value) return;
+
+  const chosen = importPreset.value.models.filter((model) =>
+    importSelection.value.includes(model.id),
+  );
+  if (chosen.length === 0) {
+    message.warning("先选择要添加的模型");
+    return;
+  }
+
+  (provider.value.models ??= []).push(...clone(chosen));
+  importOpen.value = false;
+  message.success(`已添加 ${chosen.length} 个模型，请核对参数与价格`);
 }
 
 function removeModel(model: ModelConfiguration) {
   const index = provider.value?.models?.indexOf(model) ?? -1;
   if (index >= 0) provider.value?.models?.splice(index, 1);
+  if (editing.value === model) editing.value = null;
 }
 
 function setModelInput(model: ModelConfiguration, type: "text" | "image", enabled: boolean) {
@@ -97,8 +200,20 @@ function setModelInput(model: ModelConfiguration, type: "text" | "image", enable
   model.input = [...values];
 }
 
+function modelIssues(index: number): string[] {
+  return providerIssues.value
+    .filter((issue) => issue.modelIndex === index)
+    .map((issue) => issue.message);
+}
+
+function costSummary(model: ModelConfiguration): string {
+  const { input, output } = model.cost ?? {};
+  if (typeof input !== "number" && typeof output !== "number") return "—";
+  return `$${input ?? 0} / $${output ?? 0}`;
+}
+
 function modelRowKey(model: ModelConfiguration) {
-  return model.id || String(provider.value?.models?.indexOf(model) ?? 0);
+  return String(provider.value?.models?.indexOf(model) ?? 0);
 }
 </script>
 
@@ -142,7 +257,10 @@ function modelRowKey(model: ModelConfiguration) {
         <a-form layout="vertical">
           <a-row :gutter="20">
             <a-col :span="24"
-              ><a-form-item label="Base URL"
+              ><a-form-item
+                label="Base URL"
+                :validate-status="providerLevelIssues.length ? 'error' : undefined"
+                :help="providerLevelIssues[0]?.message"
                 ><a-input
                   v-model:value="provider.baseUrl"
                   placeholder="https://api.example.com/v1" /></a-form-item
@@ -189,21 +307,44 @@ function modelRowKey(model: ModelConfiguration) {
 
       <a-card :bordered="false" class="panel-card" :body-style="{ paddingTop: '12px' }">
         <template #title>模型目录</template>
-        <template #extra
-          ><a-button type="primary" ghost size="small" @click="addModel"
-            ><Plus :size="15" />添加模型</a-button
-          ></template
-        >
+        <template #extra>
+          <a-space :size="8">
+            <a-button
+              v-if="presetsWithModels.length"
+              type="text"
+              size="small"
+              @click="importOpen = true"
+              ><Sparkles :size="15" />从预设添加</a-button
+            >
+            <a-button type="primary" ghost size="small" @click="addModel"
+              ><Plus :size="15" />添加模型</a-button
+            >
+          </a-space>
+        </template>
         <a-table
           :columns="modelColumns"
           :data-source="provider.models ?? []"
           :pagination="false"
           :row-key="modelRowKey"
           size="middle"
-          :scroll="{ x: 700 }"
+          :scroll="{ x: 880 }"
+          :row-class-name="
+            (_record: ModelConfiguration, index: number) =>
+              modelIssues(index).length ? 'model-row-invalid' : ''
+          "
         >
-          <template #bodyCell="{ column, record }">
-            <a-input v-if="column.key === 'id'" v-model:value="record.id" placeholder="model-id" />
+          <template #bodyCell="{ column, record, index }">
+            <a-tooltip
+              v-if="column.key === 'id'"
+              :title="modelIssues(index)[0]"
+              :open="modelIssues(index).length ? undefined : false"
+            >
+              <a-input
+                v-model:value="record.id"
+                placeholder="model-id"
+                :status="modelIssues(index).length ? 'error' : undefined"
+              />
+            </a-tooltip>
             <a-input
               v-else-if="column.key === 'name'"
               v-model:value="record.name"
@@ -226,10 +367,19 @@ function modelRowKey(model: ModelConfiguration) {
                 >图片</a-checkbox
               ></a-space
             >
-            <a-tooltip v-else-if="column.key === 'actions'" title="删除模型"
-              ><a-button type="text" danger shape="circle" @click="removeModel(record)"
-                ><Trash2 :size="15" /></a-button
-            ></a-tooltip>
+            <a-typography-text v-else-if="column.key === 'cost'" type="secondary">{{
+              costSummary(record)
+            }}</a-typography-text>
+            <a-space v-else-if="column.key === 'actions'" :size="0">
+              <a-tooltip title="编辑全部参数"
+                ><a-button type="text" shape="circle" @click="editing = record"
+                  ><Pencil :size="15" /></a-button
+              ></a-tooltip>
+              <a-tooltip title="删除模型"
+                ><a-button type="text" danger shape="circle" @click="removeModel(record)"
+                  ><Trash2 :size="15" /></a-button
+              ></a-tooltip>
+            </a-space>
           </template>
           <template #emptyText><a-empty description="尚未添加模型" /></template>
         </a-table>
@@ -249,12 +399,110 @@ function modelRowKey(model: ModelConfiguration) {
       title="添加 Provider"
       ok-text="添加"
       cancel-text="取消"
-      @ok="addProvider"
+      :width="560"
+      @ok="addMode === 'preset' ? addProviderFromPreset() : addProvider()"
     >
-      <a-form layout="vertical"
+      <a-segmented
+        v-if="presets.length"
+        :value="addMode"
+        :options="[
+          { label: '从预设导入', value: 'preset' },
+          { label: '手动创建', value: 'manual' },
+        ]"
+        class="preset-mode"
+        @change="(value: unknown) => (addMode = value as 'preset' | 'manual')"
+      />
+
+      <template v-if="addMode === 'preset' && presets.length">
+        <a-radio-group v-model:value="draftPresetId" class="preset-list">
+          <a-radio
+            v-for="preset in presets"
+            :key="preset.id"
+            :value="preset.id"
+            class="preset-item"
+          >
+            <div class="preset-item-body">
+              <div class="preset-item-head">
+                <a-typography-text strong>{{ preset.label }}</a-typography-text>
+                <a-tag v-if="preset.models.length">{{ preset.models.length }} 个模型</a-tag>
+                <a-tag v-else color="default">仅连接信息</a-tag>
+              </div>
+              <a-typography-text type="secondary">{{ preset.description }}</a-typography-text>
+              <a-typography-text type="secondary" class="preset-item-url">{{
+                preset.provider.baseUrl ?? "无需 Base URL"
+              }}</a-typography-text>
+            </div>
+          </a-radio>
+        </a-radio-group>
+        <a-form layout="vertical" class="preset-form">
+          <a-form-item label="Provider ID" :extra="`留空则使用 ${draftPresetId}`">
+            <a-input v-model:value="draftId" :placeholder="draftPresetId" />
+          </a-form-item>
+        </a-form>
+        <a-alert type="info" show-icon>
+          <template #message>预设只是起点</template>
+          <template #description
+            >模型 ID
+            和价格会随厂商调整，导入后请对照官方文档核对；密钥仍然只写环境变量引用。</template
+          >
+        </a-alert>
+      </template>
+
+      <a-form v-else layout="vertical"
         ><a-form-item label="Provider ID" extra="例如 ollama 或 company-proxy"
           ><a-input v-model:value="draftId" autofocus @press-enter="addProvider" /></a-form-item
       ></a-form>
     </a-modal>
+
+    <a-modal
+      v-model:open="importOpen"
+      title="从预设添加模型"
+      ok-text="添加"
+      cancel-text="取消"
+      :width="560"
+      @ok="importModels"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="预设来源">
+          <a-select v-model:value="importPresetId">
+            <a-select-option v-for="preset in presetsWithModels" :key="preset.id" :value="preset.id"
+              >{{ preset.label }}
+            </a-select-option>
+          </a-select>
+          <template #extra>
+            <a
+              v-if="importPreset?.docsUrl"
+              :href="importPreset.docsUrl"
+              target="_blank"
+              rel="noopener"
+              >官方模型文档 <ExternalLink :size="12"
+            /></a>
+          </template>
+        </a-form-item>
+        <a-form-item label="选择模型">
+          <a-checkbox-group v-model:value="importSelection" class="preset-model-list">
+            <a-checkbox
+              v-for="model in importPreset?.models ?? []"
+              :key="model.id"
+              :value="model.id"
+              :disabled="existingModelIds.has(model.id)"
+            >
+              {{ model.name ?? model.id }}
+              <a-typography-text type="secondary">{{ model.id }}</a-typography-text>
+              <a-tag v-if="existingModelIds.has(model.id)" color="default">已存在</a-tag>
+            </a-checkbox>
+          </a-checkbox-group>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <ModelEditor
+      :open="Boolean(editing)"
+      :model="editing"
+      :provider-id="selectedId"
+      :provider-api="provider?.api"
+      :issues="editingIssues"
+      @close="editing = null"
+    />
   </div>
 </template>

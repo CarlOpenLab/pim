@@ -82,6 +82,20 @@ export interface ModelConfiguration {
   [key: string]: unknown;
 }
 
+/**
+ * A starting point for a provider, not a source of truth. Connection fields are the useful
+ * part; models and pricing drift, so the UI tells the user to verify what it imported.
+ */
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  description: string;
+  docsUrl?: string;
+  /** Connection defaults. Models are kept separate so they can be imported one at a time. */
+  provider: Omit<ProviderConfiguration, "models">;
+  models: ModelConfiguration[];
+}
+
 export interface SaveResult {
   path: string;
   backupPath: string | null;
@@ -98,4 +112,6 @@ export interface AgentAdapter {
     value: Record<string, unknown>,
   ): Promise<SaveResult>;
   writeModels(value: ModelsConfiguration): Promise<SaveResult>;
+  /** Optional: provider templates whose shape is specific to this agent's models file. */
+  modelPresets?(): Promise<ProviderPreset[]>;
 }

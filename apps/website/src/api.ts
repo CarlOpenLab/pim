@@ -3,6 +3,7 @@ import type {
   AgentSummary,
   ConfigScope,
   ModelsConfiguration,
+  ProviderPreset,
   SaveResult,
 } from "./types.ts";
 
@@ -48,6 +49,13 @@ export function saveSettings(
     method: "PUT",
     body: JSON.stringify({ scope, projectPath, settings }),
   });
+}
+
+export async function listModelPresets(agentId: string): Promise<ProviderPreset[]> {
+  const payload = await request<{ presets: ProviderPreset[] }>(
+    `/api/agents/${agentId}/model-presets`,
+  );
+  return payload.presets;
 }
 
 export function saveModels(agentId: string, models: ModelsConfiguration): Promise<SaveResult> {

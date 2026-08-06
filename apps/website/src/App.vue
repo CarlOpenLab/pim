@@ -13,6 +13,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import {
   getDefaultProjectPath,
   listAgents,
+  listModelPresets,
   loadConfiguration,
   saveModels,
   saveSettings,
@@ -23,11 +24,13 @@ import GeneralSettings from "./components/GeneralSettings.vue";
 import JsonInspector from "./components/JsonInspector.vue";
 import ProvidersPanel from "./components/ProvidersPanel.vue";
 import ResourcesPanel from "./components/ResourcesPanel.vue";
+import { pruneEmptyValues, validateModels } from "./model-validation.ts";
 import type {
   AgentConfiguration,
   AgentSummary,
   ConfigScope,
   ModelsConfiguration,
+  ProviderPreset,
   ViewId,
 } from "./types.ts";
 
@@ -43,6 +46,7 @@ const sectionCatalog = [
 ] as const;
 
 const agents = ref<AgentSummary[]>([]);
+const presets = ref<ProviderPreset[]>([]);
 const agentId = ref("pi");
 const config = ref<AgentConfiguration | null>(null);
 const scope = ref<ConfigScope>("global");
@@ -62,11 +66,24 @@ const diagnostics = computed(() => [
   ...(config.value?.models.diagnostics ?? []),
 ]);
 const hasBlockingError = computed(() => diagnostics.value.some((item) => item.level === "error"));
+const modelIssues = computed(() => validateModels(models.value));
 const isDirty = computed(
   () =>
     JSON.stringify(settings.value) !== settingsBaseline.value ||
     JSON.stringify(models.value) !== modelsBaseline.value,
 );
+/** Names the first thing standing between the current edits and a successful save. */
+const saveBlocker = computed(() => {
+  if (loadError.value) return "无法连接到 Pim API";
+  if (hasBlockingError.value) return "配置文件本身有错误，请先在高级 JSON 里修好";
+  const [issue] = modelIssues.value;
+  if (issue)
+    return issue.modelIndex === null
+      ? `${issue.providerId}：${issue.message}`
+      : `${issue.providerId} 第 ${issue.modelIndex + 1} 个模型：${issue.message}`;
+  if (!isDirty.value) return "没有需要保存的修改";
+  return "";
+});
 const sections = computed(() =>
   sectionCatalog.filter(
     (section) => config.value?.agent.capabilities.includes(section.key) ?? true,
@@ -83,7 +100,13 @@ async function load(nextAgent = agentId.value, nextScope = scope.value) {
   try {
     if (!projectPath.value) projectPath.value = await getDefaultProjectPath();
     if (agents.value.length === 0) agents.value = await listAgents();
-    config.value = await loadConfiguration(nextAgent, nextScope, projectPath.value);
+    // Presets are a convenience — an adapter that ships none must not break the load.
+    const [nextConfig, nextPresets] = await Promise.all([
+      loadConfiguration(nextAgent, nextScope, projectPath.value),
+      listModelPresets(nextAgent).catch(() => [] as ProviderPreset[]),
+    ]);
+    config.value = nextConfig;
+    presets.value = nextPresets;
     agentId.value = nextAgent;
     scope.value = nextScope;
     settingsBaseline.value = JSON.stringify(config.value.settings.data);
@@ -112,6 +135,12 @@ function reload(nextAgent = agentId.value, nextScope = scope.value) {
 
 async function save() {
   if (!config.value || hasBlockingError.value) return;
+  if (modelIssues.value.length > 0) {
+    message.error(saveBlocker.value);
+    return;
+  }
+
+  pruneEmptyValues(models.value);
   saving.value = true;
   try {
     const results = [];
@@ -187,13 +216,17 @@ onMounted(() => load());
               ><a-button type="text" shape="circle" @click="jsonOpen = true"
                 ><Code2 :size="16" /></a-button
             ></a-tooltip>
-            <a-button
-              type="primary"
-              :disabled="!isDirty || Boolean(loadError) || hasBlockingError"
-              :loading="saving"
-              @click="save"
-              ><Save :size="15" />保存<span v-if="isDirty" class="bar-dirty"
-            /></a-button>
+            <a-tooltip :title="saveBlocker">
+              <span>
+                <a-button
+                  type="primary"
+                  :disabled="Boolean(saveBlocker)"
+                  :loading="saving"
+                  @click="save"
+                  ><Save :size="15" />保存<span v-if="isDirty" class="bar-dirty"
+                /></a-button>
+              </span>
+            </a-tooltip>
           </div>
         </header>
 
@@ -241,6 +274,8 @@ onMounted(() => load());
                 v-else-if="activeView === 'providers'"
                 :models="models"
                 :secret-refs="config.secretRefs"
+                :presets="presets"
+                :issues="modelIssues"
               />
               <CredentialsPanel
                 v-else-if="activeView === 'credentials'"
