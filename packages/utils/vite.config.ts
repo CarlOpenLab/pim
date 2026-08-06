@@ -1,0 +1,18 @@
+import { defineConfig } from "vite-plus";
+
+export default defineConfig({
+  test: {
+    globals: true,
+  },
+  pack: {
+    dts: true,
+    exports: true,
+  },
+  lint: {
+    options: {
+      typeAware: true,
+      typeCheck: true,
+    },
+  },
+  fmt: {},
+});
