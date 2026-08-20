@@ -15,6 +15,7 @@ import {
   listAgents,
   listModelPresets,
   loadConfiguration,
+  refreshAgentPresets,
   saveModels,
   saveSettings,
 } from "./api.ts";
@@ -55,6 +56,7 @@ const activeView = ref<ViewId>("settings");
 const jsonOpen = ref(false);
 const loading = ref(true);
 const saving = ref(false);
+const presetsRefreshing = ref(false);
 const loadError = ref("");
 const settingsBaseline = ref("");
 const modelsBaseline = ref("");
@@ -131,6 +133,19 @@ function reload(nextAgent = agentId.value, nextScope = scope.value) {
     cancelText: "继续编辑",
     onOk: () => load(nextAgent, nextScope),
   });
+}
+
+/** Pulls the latest model catalog/prices from upstream docs and swaps it into the presets. */
+async function refreshPresets() {
+  presetsRefreshing.value = true;
+  try {
+    presets.value = await refreshAgentPresets(agentId.value);
+    message.success("预设已从官网文档刷新，可到「从预设添加」导入最新模型");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "刷新预设失败");
+  } finally {
+    presetsRefreshing.value = false;
+  }
 }
 
 async function save() {
@@ -276,6 +291,8 @@ onMounted(() => load());
                 :secret-refs="config.secretRefs"
                 :presets="presets"
                 :issues="modelIssues"
+                :presets-refreshing="presetsRefreshing"
+                @refresh-presets="refreshPresets"
               />
               <CredentialsPanel
                 v-else-if="activeView === 'credentials'"

@@ -114,4 +114,9 @@ export interface AgentAdapter {
   writeModels(value: ModelsConfiguration): Promise<SaveResult>;
   /** Optional: provider templates whose shape is specific to this agent's models file. */
   modelPresets?(): Promise<ProviderPreset[]>;
+  /**
+   * Optional: rebuild provider templates from upstream docs (model IDs and prices drift
+   * whenever a vendor ships, so the UI offers a manual refresh instead of hardcoding them).
+   */
+  refreshPresets?(): Promise<ProviderPreset[]>;
 }

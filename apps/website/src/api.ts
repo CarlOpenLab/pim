@@ -58,6 +58,15 @@ export async function listModelPresets(agentId: string): Promise<ProviderPreset[
   return payload.presets;
 }
 
+/** Rebuilds presets from upstream docs (e.g. the OpenCode Go model catalog). */
+export async function refreshAgentPresets(agentId: string): Promise<ProviderPreset[]> {
+  const payload = await request<{ presets: ProviderPreset[] }>(
+    `/api/agents/${agentId}/presets/refresh`,
+    { method: "POST" },
+  );
+  return payload.presets;
+}
+
 export function saveModels(agentId: string, models: ModelsConfiguration): Promise<SaveResult> {
   return request(`/api/agents/${agentId}/models`, {
     method: "PUT",

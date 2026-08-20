@@ -111,6 +111,24 @@ app.get("/api/agents/:id/model-presets", async (context) => {
   return context.json({ presets: (await adapter.modelPresets?.()) ?? [] });
 });
 
+/**
+ * Vendors ship models and change prices often, so the UI offers a manual refresh instead
+ * of forcing every new model into a code change. The adapter decides what it can rebuild
+ * from upstream docs; adapters without a source return 400.
+ */
+app.post("/api/agents/:id/presets/refresh", async (context) => {
+  const adapter = adapters.get(context.req.param("id"));
+  if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
+  if (!adapter.refreshPresets) return context.json({ error: "该 Agent 不支持从文档刷新预设" }, 400);
+
+  try {
+    return context.json({ presets: await adapter.refreshPresets() });
+  } catch (error) {
+    // Network failures and refactored docs pages are user input problems, not server faults.
+    return context.json({ error: error instanceof Error ? error.message : "刷新预设失败" }, 400);
+  }
+});
+
 app.put("/api/agents/:id/models", async (context) => {
   const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);

@@ -144,7 +144,7 @@ export const piModelPresets: ProviderPreset[] = [
     id: "opencode-go",
     label: "OpenCode Go",
     description:
-      "OpenCode 的低成本开源编程模型订阅服务（首月 $5，之后 $10/月）。统一网关下聚合多家开源模型，按模型自动路由到 Chat Completions、Responses 或 Messages 接口；密钥在 OpenCode Zen 控制台获取，设为 $OPENCODE_API_KEY。",
+      "OpenCode 的低成本开源编程模型订阅服务（首月 $5，之后 $10/月）。统一网关下聚合多家开源模型，按模型自动路由到 Chat Completions、Responses 或 Messages 接口；密钥在 OpenCode Zen 控制台获取，设为 $OPENCODE_API_KEY。模型与价格可随时点击「刷新预设」从官网文档同步。",
     docsUrl: "https://opencode.ai/docs/zh-cn/go/",
     provider: {
       baseUrl: "https://opencode.ai/zen/go/v1",
@@ -157,6 +157,7 @@ export const piModelPresets: ProviderPreset[] = [
         name: "Grok 4.5",
         reasoning: true,
         input: ["text"],
+        api: "openai-responses",
         cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
       },
       {
@@ -169,6 +170,13 @@ export const piModelPresets: ProviderPreset[] = [
       {
         id: "glm-5.1",
         name: "GLM-5.1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+      },
+      {
+        id: "glm-5.3",
+        name: "GLM-5.3",
         reasoning: true,
         input: ["text"],
         cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
@@ -201,7 +209,8 @@ export const piModelPresets: ProviderPreset[] = [
         input: ["text"],
         contextWindow: 1000000,
         maxTokens: 384000,
-        cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+        // 文档标注高峰/低谷价：Off-Peak 为 $0.66/$1.98/$0.022；Peak（01:00-04:00 与 06:00-10:00 UTC）为 $1.32/$3.96/$0.044。
+        cost: { input: 0.66, output: 1.98, cacheRead: 0.022, cacheWrite: 0 },
       },
       {
         id: "deepseek-v4-flash",
@@ -210,7 +219,8 @@ export const piModelPresets: ProviderPreset[] = [
         input: ["text"],
         contextWindow: 1000000,
         maxTokens: 384000,
-        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+        // Off-Peak 价；Peak 时段为 $0.44/$1.32/$0.014。
+        cost: { input: 0.22, output: 0.66, cacheRead: 0.007, cacheWrite: 0 },
       },
       {
         id: "mimo-v2.5",
@@ -279,6 +289,14 @@ export const piModelPresets: ProviderPreset[] = [
         input: ["text"],
         api: "anthropic-messages",
         cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+      },
+      {
+        id: "muse-spark-1.2-contributor",
+        name: "Muse Spark 1.2 Contributor",
+        reasoning: true,
+        input: ["text"],
+        api: "openai-responses",
+        cost: { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 },
       },
       {
         id: "qwen3.8-max",

@@ -42,6 +42,13 @@ the per-model drawer covers everything else, with `compat` left as a JSON field 
 are provider-specific. `apps/website/src/model-validation.ts` runs the same rules the API enforces
 on write, so an incomplete row is pointed at in place instead of coming back as a schema error.
 
+Presets can also be rebuilt from upstream docs without a code change. The model catalog card has a
+「刷新预设」button (`POST /api/agents/:id/presets/refresh`, backed by
+`apps/api/src/presets/opencode-go.ts`); it re-reads the OpenCode Go docs, re-parses the model IDs,
+endpoints and per-million-token prices, and caches the result in the agent config directory so the
+fresh catalog survives restarts. Adapters that do not opt into `refreshPresets()` simply hide the
+button.
+
 ## Adding an agent
 
 `AgentAdapter` (`apps/api/src/adapters/types.ts`) is the only thing an agent needs. Implement it

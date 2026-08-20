@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { ExternalLink, Pencil, Plus, Sparkles, Trash2, TriangleAlert } from "@lucide/vue";
+import {
+  ExternalLink,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+} from "@lucide/vue";
 import message from "antdv-next/dist/message/index";
 import { computed, ref, watch } from "vue";
 import type { ModelIssue } from "../model-validation.ts";
@@ -17,7 +25,9 @@ const props = defineProps<{
   secretRefs: SecretReference[];
   presets: ProviderPreset[];
   issues: ModelIssue[];
+  presetsRefreshing?: boolean;
 }>();
+const emit = defineEmits<{ "refresh-presets": [] }>();
 const selectedId = ref("");
 const addOpen = ref(false);
 const addMode = ref<"preset" | "manual">("preset");
@@ -309,6 +319,15 @@ function modelRowKey(model: ModelConfiguration) {
         <template #title>模型目录</template>
         <template #extra>
           <a-space :size="8">
+            <a-tooltip title="拉取 OpenCode 官网文档中的最新模型与价格，更新预设">
+              <a-button
+                type="text"
+                size="small"
+                :loading="props.presetsRefreshing"
+                @click="emit('refresh-presets')"
+                ><RefreshCw :size="15" />刷新预设</a-button
+              >
+            </a-tooltip>
             <a-button
               v-if="presetsWithModels.length"
               type="text"
@@ -443,7 +462,7 @@ function modelRowKey(model: ModelConfiguration) {
           <template #message>预设只是起点</template>
           <template #description
             >模型 ID
-            和价格会随厂商调整，导入后请对照官方文档核对；密钥仍然只写环境变量引用。</template
+            和价格会随厂商调整，导入后请对照官方文档核对；若发现列表过时，在「模型目录」点「刷新预设」可从官网文档同步最新模型与价格。密钥仍然只写环境变量引用。</template
           >
         </a-alert>
       </template>

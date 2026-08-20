@@ -28,6 +28,8 @@ PIM 将其 API 绑定到 `127.0.0.1`。
 
 编辑在两处进行。模型表格覆盖值得在目录中横向扫描的字段;单模型抽屉覆盖其余所有字段,其中 `compat` 作为 JSON 字段保留,因为其键由服务商决定。`apps/website/src/model-validation.ts` 运行与 API 写入时相同的规则,因此不完整的行会被就地指出,而非以 Schema 错误的形式返回。
 
+预设也可以不经过代码改动直接从官方文档重建。模型目录卡片上有「刷新预设」按钮(`POST /api/agents/:id/presets/refresh`,由 `apps/api/src/presets/opencode-go.ts` 实现);它会重新抓取 OpenCode Go 文档,解析模型 ID、接口形态与每百万 Token 价格,并把结果缓存在 Agent 配置目录下,重启后仍然有效。未实现 `refreshPresets()` 的适配器不会显示该按钮。
+
 ## 新增 Agent
 
 `AgentAdapter`(`apps/api/src/adapters/types.ts`)是 Agent 唯一需要实现的内容。在 `pi.ts` 旁实现它,在 `apps/api/src/index.ts` 的 `adapters` 映射中注册,并声明其 `capabilities`——UI 从 `GET /api/agents` 推导 Agent 导航栏及其标签页,因此无需改动前端。`modelPresets` 为可选项;省略它的适配器只会得到一个纯手动的添加流程。
