@@ -47,7 +47,9 @@ const modelColumns = [
 ];
 
 const providerIds = computed(() => Object.keys(props.models.providers).sort());
-const provider = computed(() => props.models.providers[selectedId.value]);
+const providerSegmentOptions = computed(() =>
+  providerIds.value.map((id) => ({ label: id, value: id })),
+);
 const providerIssues = computed(() =>
   props.issues.filter((issue) => issue.providerId === selectedId.value),
 );
@@ -233,7 +235,7 @@ function modelRowKey(model: ModelConfiguration) {
       <a-segmented
         v-if="providerIds.length"
         :value="selectedId"
-        :options="providerIds"
+        :options="providerSegmentOptions"
         @change="(value: unknown) => (selectedId = value as string)"
       />
       <a-button type="dashed" @click="addOpen = true"><Plus :size="15" />添加 Provider</a-button>
@@ -482,8 +484,21 @@ function modelRowKey(model: ModelConfiguration) {
       @ok="importModels"
     >
       <a-form layout="vertical">
+        <a-alert
+          v-if="!presetsWithModels.length"
+          type="info"
+          show-icon
+          message="暂无可用预设模型"
+          description="可点「刷新预设」从官网文档同步，或手动在模型目录添加。"
+          class="preset-empty-alert"
+        />
         <a-form-item label="预设来源">
-          <a-select v-model:value="importPresetId">
+          <a-select
+            v-model:value="importPresetId"
+            placeholder="选择预设"
+            :not-found-content="presetsWithModels.length ? undefined : '暂无预设'"
+            :disabled="!presetsWithModels.length"
+          >
             <a-select-option v-for="preset in presetsWithModels" :key="preset.id" :value="preset.id"
               >{{ preset.label }}
             </a-select-option>

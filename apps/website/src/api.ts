@@ -3,10 +3,11 @@ import type {
   AgentSummary,
   ConfigScope,
   ModelsConfiguration,
+  OmpAvailableModel,
+  OmpRolePreset,
   ProviderPreset,
   SaveResult,
 } from "./types.ts";
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
@@ -65,6 +66,37 @@ export async function refreshAgentPresets(agentId: string): Promise<ProviderPres
     { method: "POST" },
   );
   return payload.presets;
+}
+export async function listRolePresets(agentId: string): Promise<OmpRolePreset[]> {
+  const payload = await request<{ presets: OmpRolePreset[] }>(
+    `/api/agents/${agentId}/role-presets`,
+  );
+  return payload.presets;
+}
+
+export async function listAvailableModels(agentId: string): Promise<OmpAvailableModel[]> {
+  const payload = await request<{ models: OmpAvailableModel[] }>(
+    `/api/agents/${agentId}/available-models`,
+  );
+  return payload.models;
+}
+
+export async function getModelRoles(agentId: string): Promise<Record<string, string>> {
+  const payload = await request<{ roles: Record<string, string> }>(
+    `/api/agents/${agentId}/model-roles`,
+  );
+  return payload.roles;
+}
+
+export async function saveModelRoles(
+  agentId: string,
+  roles: Record<string, string>,
+): Promise<Record<string, string>> {
+  const payload = await request<{ roles: Record<string, string> }>(
+    `/api/agents/${agentId}/model-roles`,
+    { method: "PUT", body: JSON.stringify({ roles }) },
+  );
+  return payload.roles;
 }
 
 export function saveModels(agentId: string, models: ModelsConfiguration): Promise<SaveResult> {

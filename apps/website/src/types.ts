@@ -1,6 +1,49 @@
 export type AgentId = "pi" | "omp";
 export type ConfigScope = "global" | "project";
-export type ViewId = "settings" | "providers" | "credentials" | "resources";
+export type ViewId =
+  | "settings"
+  | "providers"
+  | "credentials"
+  | "resources"
+  | "roles"
+  | "modelRoles"
+  | "model"
+  | "persona"
+  | "terminal";
+export interface OmpAvailableModel {
+  provider: string;
+  id: string;
+  selector: string;
+  name: string;
+  reasoning: boolean;
+  thinking: string[];
+  input: string[];
+  contextWindow?: number;
+  maxTokens?: number;
+  cost?: ModelCost;
+}
+
+export interface OmpRolePreset {
+  id: string;
+  label: string;
+  description: string;
+  prompt: string;
+  icon: string;
+  accent: string;
+}
+
+export interface TerminalConfig {
+  theme?: "dark" | "light" | "auto";
+  fontFamily?: string;
+  fontSize?: number;
+  lineHeight?: number;
+  opacity?: number;
+  blur?: boolean;
+  cursorStyle?: "block" | "underline" | "bar";
+  cursorBlink?: boolean;
+  background?: string;
+  accent?: string;
+}
 
 /** Sentinel the API sends in place of a literal secret it found on disk. */
 export const REDACTED = "__PIM_REDACTED__";
