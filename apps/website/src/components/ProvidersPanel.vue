@@ -47,6 +47,7 @@ const modelColumns = [
 ];
 
 const providerIds = computed(() => Object.keys(props.models.providers).sort());
+const provider = computed(() => props.models.providers[selectedId.value]);
 const providerSegmentOptions = computed(() =>
   providerIds.value.map((id) => ({ label: id, value: id })),
 );
@@ -154,6 +155,16 @@ function addProviderFromPreset() {
   if (!preset) return;
 
   const id = draftId.value.trim() || preset.id;
+  // 已存在则直接切换过去，而不是假死
+  if (props.models.providers[id]) {
+    selectedId.value = id;
+    addOpen.value = false;
+    message.info(
+      `“${id}” 已存在，已为你切换到该 Provider。如需同步最新模型，请用「从预设添加模型」或「刷新预设」`,
+    );
+    return;
+  }
+
   const created = createProvider(id, {
     ...clone(preset.provider),
     models: clone(preset.models),
@@ -165,7 +176,6 @@ function addProviderFromPreset() {
         : `已导入 ${preset.label} 的连接信息，请自行添加模型`,
     );
 }
-
 function removeProvider() {
   delete props.models.providers[selectedId.value];
 }
@@ -445,7 +455,8 @@ function modelRowKey(model: ModelConfiguration) {
             <div class="preset-item-body">
               <div class="preset-item-head">
                 <a-typography-text strong>{{ preset.label }}</a-typography-text>
-                <a-tag v-if="preset.models.length">{{ preset.models.length }} 个模型</a-tag>
+                <a-tag v-if="props.models.providers[preset.id]" color="green">已添加</a-tag>
+                <a-tag v-else-if="preset.models.length">{{ preset.models.length }} 个模型</a-tag>
                 <a-tag v-else color="default">仅连接信息</a-tag>
               </div>
               <a-typography-text type="secondary">{{ preset.description }}</a-typography-text>
@@ -456,7 +467,10 @@ function modelRowKey(model: ModelConfiguration) {
           </a-radio>
         </a-radio-group>
         <a-form layout="vertical" class="preset-form">
-          <a-form-item label="Provider ID" :extra="`留空则使用 ${draftPresetId}`">
+          <a-form-item
+            label="Provider ID"
+            :extra="`留空则使用 ${draftPresetId}${props.models.providers[draftPresetId] ? '（已存在，点击添加将切换过去）' : ''}`"
+          >
             <a-input v-model:value="draftId" :placeholder="draftPresetId" />
           </a-form-item>
         </a-form>
