@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "ready": "vp check && vp run -r test && vp run -r build",
-    "dev": "vp run --parallel --filter api --filter website dev",
+    "dev": "pnpm --parallel --filter api --filter website dev",
+    "dev:vp": "vp run --parallel --filter api --filter website dev",
+    "dev:stop": "lsof -nP -iTCP:5173,8787 -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $2}' | xargs -r kill 2>/dev/null; sleep 0.5; lsof -nP -iTCP:5173,8787,8799 -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $2}' | xargs -r kill -9 2>/dev/null; echo \"cleaned\"; lsof -nP -iTCP:3000-10000 -sTCP:LISTEN 2>/dev/null || echo \"no dev ports listening\"",
+    "cleanup": "pnpm dev:stop",
     "prepare": "vp config"
   },
   "devDependencies": {

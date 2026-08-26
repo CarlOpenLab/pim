@@ -203,8 +203,18 @@ app.onError((error, context) => {
 });
 
 const port = Number(process.env.PORT || 8787);
-serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
+const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
   console.log(`Pim API listening on http://${info.address}:${info.port}`);
 });
+
+// 防止 Ctrl+C / kill 后 tsx watch 子进程变孤儿：显式关闭 http server
+function shutdown(signal: string) {
+  console.log(`\nReceived ${signal}, shutting down...`);
+  server.close(() => process.exit(0));
+  // 兜底：3s 后强制退出
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 export default app;
