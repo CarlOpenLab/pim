@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { Monitor, Palette, Settings2, Zap } from "@lucide/vue";
 import TerminalPreview from "./TerminalPreview.vue";
 import type { ModelsConfiguration, OmpAvailableModel, OmpRolePreset } from "../types.ts";
@@ -12,11 +12,34 @@ const props = defineProps<{
   availableModels?: OmpAvailableModel[];
 }>();
 
+const emit = defineEmits<{ change: [value: Record<string, unknown>] }>();
+
+/** Everything here is plain JSON, so a round trip detaches the working copy from props. */
+function cloneSettings(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+/**
+ * Children never mutate props: edits land on this working copy and are emitted upward;
+ * App writes them back into the configuration, and the guard below re-syncs only when
+ * the change came from somewhere else (JSON editor, reload, agent switch).
+ */
+const working = ref(cloneSettings(props.settings));
+watch(
+  () => props.settings,
+  (value) => {
+    if (JSON.stringify(value) !== JSON.stringify(working.value))
+      working.value = cloneSettings(value);
+  },
+  { deep: true },
+);
+watch(working, (value) => emit("change", cloneSettings(value)), { deep: true });
+
 function field<T>(key: string, fallback: T) {
   return computed<T>({
-    get: () => (props.settings[key] as T | undefined) ?? fallback,
+    get: () => (working.value[key] as T | undefined) ?? fallback,
     set: (value) => {
-      props.settings[key] = value;
+      working.value[key] = value;
     },
   });
 }
@@ -24,11 +47,11 @@ function field<T>(key: string, fallback: T) {
 function nestedField<T>(group: string, key: string, fallback: T) {
   return computed<T>({
     get: () =>
-      ((props.settings[group] as Record<string, unknown> | undefined)?.[key] as T | undefined) ??
+      ((working.value[group] as Record<string, unknown> | undefined)?.[key] as T | undefined) ??
       fallback,
     set: (value) => {
-      props.settings[group] = {
-        ...(props.settings[group] as Record<string, unknown> | undefined),
+      working.value[group] = {
+        ...(working.value[group] as Record<string, unknown> | undefined),
         [key]: value,
       };
     },
@@ -59,7 +82,12 @@ const retryDelay = nestedField("retry", "baseDelayMs", 2000);
 // —— 模型相关下拉的数据源：从 models.providers + availableModels 汇聚 —— //
 const providerOptions = computed(() => {
   const ids = Object.keys(props.models?.providers ?? {}).sort();
-  return ids.map((id) => ({ value: id, label: id }));
+  const options = ids.map((id) => ({ value: id, label: id }));
+  // 文件里已保存的值不在可选列表时仍然展示，避免“看着像没配置”
+  const current = (defaultProvider.value as string) || "";
+  if (current && !options.some((option) => option.value === current))
+    options.unshift({ value: current, label: current });
+  return options;
 });
 
 const allModelSelectors = computed(() => {
@@ -82,7 +110,12 @@ const modelOptions = computed(() => {
     : allModelSelectors.value;
   // 当按 provider 过滤后为空，回退到全量，避免下拉“看起来空的”
   const source = list.length ? list : allModelSelectors.value;
-  return source.map((selector) => ({ value: selector, label: selector }));
+  const options = source.map((selector) => ({ value: selector, label: selector }));
+  // settings.json 里可能是裸模型 id（无 provider 前缀），保留为可选项防止选不中
+  const current = (defaultModel.value as string) || "";
+  if (current && !options.some((option) => option.value === current))
+    options.unshift({ value: current, label: current });
+  return options;
 });
 
 const enabledModelOptions = computed(() => {
@@ -294,8 +327,8 @@ const fontFamilyOptions = computed(() => {
         ></a-col>
       </a-row>
 
-      <!-- 终端美化进阶 -->
-      <div class="terminal-tune">
+      <!-- 终端美化进阶：terminal 字段只有 OMP 会读取，Pi 的 settings.json 不写这些 -->
+      <div v-if="isOmp" class="terminal-tune">
         <div class="tune-head">
           <Palette :size="14" /> 外观微调
           <a-typography-text type="secondary"
@@ -345,8 +378,8 @@ const fontFamilyOptions = computed(() => {
             ><a-form-item label="字号"
               ><a-input-number
                 v-model:value="fontSize"
-                :min="10"
-                :max="20"
+                :min="8"
+                :max="24"
                 addon-after="px" /></a-form-item
           ></a-col>
           <a-col :xs="12" :md="6"
@@ -361,7 +394,7 @@ const fontFamilyOptions = computed(() => {
             ><a-form-item label="不透明度"
               ><a-input-number
                 v-model:value="opacity"
-                :min="0.5"
+                :min="0.3"
                 :max="1"
                 :step="0.02" /></a-form-item
           ></a-col>
@@ -442,7 +475,6 @@ const fontFamilyOptions = computed(() => {
             ><a-input-number
               v-model:value="maxRetries"
               :min="0"
-              :max="20"
               :disabled="!retryEnabled"
               addon-before="次数"
               class="inline-number" /><a-input-number

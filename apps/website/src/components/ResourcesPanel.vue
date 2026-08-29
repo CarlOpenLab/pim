@@ -1,8 +1,26 @@
 <script setup lang="ts">
 import { Boxes, FileCode2, Package, Paintbrush, Plus, Sparkles, Trash2 } from "@lucide/vue";
-import { reactive, ref } from "vue";
+import { reactive, ref, watch } from "vue";
 
 const props = defineProps<{ settings: Record<string, unknown> }>();
+const emit = defineEmits<{ change: [value: Record<string, unknown>] }>();
+
+function cloneSettings(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+/** Edits land on a local working copy and are emitted; props are never mutated. */
+const working = ref(cloneSettings(props.settings));
+watch(
+  () => props.settings,
+  (value) => {
+    if (JSON.stringify(value) !== JSON.stringify(working.value))
+      working.value = cloneSettings(value);
+  },
+  { deep: true },
+);
+watch(working, (value) => emit("change", cloneSettings(value)), { deep: true });
+
 const activeKeys = ref(["extensions", "skills"]);
 const resourceItems = [
   {
@@ -29,17 +47,17 @@ const resourceItems = [
 const drafts = reactive<Record<string, string>>({});
 
 function getResources(key: string): string[] {
-  return Array.isArray(props.settings[key]) ? (props.settings[key] as string[]) : [];
+  return Array.isArray(working.value[key]) ? (working.value[key] as string[]) : [];
 }
 
 function removeResource(key: string, index: number) {
-  props.settings[key] = getResources(key).filter((_, currentIndex) => currentIndex !== index);
+  working.value[key] = getResources(key).filter((_, currentIndex) => currentIndex !== index);
 }
 
 function addResource(key: string) {
   const value = drafts[key]?.trim();
   if (!value) return;
-  props.settings[key] = [...getResources(key), value];
+  working.value[key] = [...getResources(key), value];
   drafts[key] = "";
 }
 </script>

@@ -3,7 +3,7 @@
  * Presets are starting points — connection fields are durable while model IDs/prices drift.
  * Never carry a literal key, only `$VAR_NAME`.
  */
-import type { ProviderPreset } from "../adapters/types.js";
+import type { ProviderPreset, RolePreset } from "../adapters/types.js";
 
 export const ompModelPresets: ProviderPreset[] = [
   {
@@ -125,16 +125,9 @@ export const ompModelPresets: ProviderPreset[] = [
 ];
 
 /** OMP 内置角色预设 — 与 settings.json 的 `roles` / `activeRole` 联动 */
-export interface OmpRolePreset {
-  id: string;
-  label: string;
-  description: string;
-  prompt: string;
-  icon: string;
-  accent: string;
-}
+export type OmpRolePreset = RolePreset;
 
-export const ompRolePresets: OmpRolePreset[] = [
+export const ompRolePresets: RolePreset[] = [
   {
     id: "coder",
     label: "全栈工程师",

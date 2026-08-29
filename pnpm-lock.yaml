@@ -301,6 +301,9 @@ importers:
       antdv-next:
         specifier: 'catalog:'
         version: 1.4.6(vue@3.5.40(typescript@7.0.2))
+      jsonc-parser:
+        specifier: 'catalog:'
+        version: 3.3.1
       vue:
         specifier: 'catalog:'
         version: 3.5.40(typescript@7.0.2)

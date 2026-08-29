@@ -303,6 +303,11 @@ code {
   border-radius: 20px;
   border: 1px solid #e8d8ff;
 }
+.persona-hint {
+  display: block;
+  margin-top: 12px;
+  font-size: 12px;
+}
 .panel-empty {
   display: grid;
   min-height: 300px;

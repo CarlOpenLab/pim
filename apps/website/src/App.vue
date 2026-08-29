@@ -9,7 +9,6 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
-  Terminal,
 } from "@lucide/vue";
 import { message, Modal } from "antdv-next";
 import { computed, onMounted, ref, watch } from "vue";
@@ -31,6 +30,7 @@ import GeneralSettings from "./components/GeneralSettings.vue";
 import JsonInspector from "./components/JsonInspector.vue";
 import OmpModelRoles from "./components/OmpModelRoles.vue";
 import OmpRoleSelector from "./components/OmpRoleSelector.vue";
+import PersonaEditor from "./components/PersonaEditor.vue";
 import ProvidersPanel from "./components/ProvidersPanel.vue";
 import ResourcesPanel from "./components/ResourcesPanel.vue";
 import { pruneEmptyValues, validateModels } from "./model-validation.ts";
@@ -49,7 +49,7 @@ import type {
  * backend adapter — no changes here.
  */
 const sectionCatalog = [
-  // OMP 专属：模型·角色 / 人格·预设 / 设置（终端已归入设置）
+  // OMP 专属：模型·角色 / 人格·预设 / 设置
   { key: "model", label: "模型 · 角色", icon: Cpu, caps: ["model", "modelRoles"] },
   { key: "persona", label: "人格 · 预设", icon: Crown, caps: ["persona", "roles"] },
   // Pi 与通用
@@ -57,7 +57,6 @@ const sectionCatalog = [
   { key: "providers", label: "模型服务", icon: SlidersHorizontal, caps: ["providers", "models"] },
   { key: "credentials", label: "凭据与变量", icon: KeyRound, caps: ["credentials"] },
   { key: "resources", label: "资源", icon: Package, caps: ["resources"] },
-  { key: "terminal", label: "终端", icon: Terminal, caps: ["terminal"] },
 ] as const;
 
 const agents = ref<AgentSummary[]>([]);
@@ -203,6 +202,7 @@ const mergedAvailableModels = computed<OmpAvailableModel[]>(() => {
 });
 
 async function handleSaveModelRoles(roles: Record<string, string>) {
+  saving.value = true;
   try {
     await saveModelRoles(agentId.value, roles);
     (settings.value as Record<string, unknown>).modelRoles = { ...roles };
@@ -236,6 +236,9 @@ async function save() {
     modelsBaseline.value = JSON.stringify(models.value);
     message.success(results.length ? `已保存 ${results.length} 个配置文件` : "没有需要保存的修改");
     if (results.some((result) => result.backupPath)) message.info("已为原文件创建备份");
+    const migrated = results.flatMap((result) => result.migratedKeys ?? []);
+    if (migrated.length)
+      message.info(`已将 ${migrated.join("、")} 迁移到 omp config，settings.json 不再保存这些键`);
   } catch (error) {
     message.error(error instanceof Error ? error.message : "保存失败");
   } finally {
@@ -247,6 +250,15 @@ function applyJson(value: Record<string, unknown>) {
   if (!config.value) return;
   if (isModelsView.value) config.value.models.data = value as unknown as ModelsConfiguration;
   else config.value.settings.data = value;
+}
+
+/** Panels emit their working copy; App owns the configuration state. */
+function applySettingsDraft(value: Record<string, unknown>) {
+  if (config.value) config.value.settings.data = value;
+}
+
+function applyModelsDraft(value: ModelsConfiguration) {
+  if (config.value) config.value.models.data = value;
 }
 
 watch(projectPath, (value, oldValue) => {
@@ -345,6 +357,18 @@ onMounted(() => load());
               :description="diagnostic.file"
               class="content-alert"
             />
+            <a-alert
+              v-if="!loading && !loadError && modelIssues.length && activeView !== 'providers'"
+              type="warning"
+              show-icon
+              class="content-alert"
+            >
+              <template #message>模型配置有 {{ modelIssues.length }} 处问题，保存已暂停</template>
+              <template #description>
+                {{ modelIssues[0]?.message }}
+                <a @click="activeView = 'providers'">去「模型服务」处理</a>
+              </template>
+            </a-alert>
             <div v-if="loading" class="loading-state">
               <a-spin size="large" /><a-typography-text type="secondary"
                 >正在读取配置...</a-typography-text
@@ -358,20 +382,14 @@ onMounted(() => load());
                 :role-presets="rolePresets"
                 :models="models as any"
                 :available-models="mergedAvailableModels"
-              />
-              <GeneralSettings
-                v-else-if="activeView === 'terminal'"
-                :settings="settings"
-                :agent-id="agentId"
-                :role-presets="rolePresets"
-                :models="models as any"
-                :available-models="mergedAvailableModels"
+                @change="applySettingsDraft"
               />
               <OmpModelRoles
                 v-else-if="activeView === 'model' || activeView === 'modelRoles'"
                 :model-roles="modelRoles"
                 :available-models="mergedAvailableModels"
                 :loading="loading"
+                :saving="saving"
                 @save="handleSaveModelRoles"
               />
               <div
@@ -392,6 +410,19 @@ onMounted(() => load());
                       }
                     "
                   />
+                  <a-typography-text type="secondary" class="persona-hint">
+                    点击卡片切换当前人格；修改要写进配置文件，请点右上角「保存」。
+                  </a-typography-text>
+                </a-card>
+                <a-card :bordered="false" class="panel-card">
+                  <template #title>
+                    <span class="card-title">自定义人格</span>
+                    <span class="card-subtitle">写入 settings.json → roles，可选预设之外的 id</span>
+                  </template>
+                  <PersonaEditor
+                    :roles="(settings.roles as any) ?? []"
+                    @change="(roles: any) => ((settings as any).roles = roles)"
+                  />
                 </a-card>
               </div>
               <ProvidersPanel
@@ -402,6 +433,7 @@ onMounted(() => load());
                 :issues="modelIssues"
                 :presets-refreshing="presetsRefreshing"
                 @refresh-presets="refreshPresets"
+                @change="applyModelsDraft"
               />
               <CredentialsPanel
                 v-else-if="activeView === 'credentials'"
@@ -409,7 +441,7 @@ onMounted(() => load());
                 :secret-refs="config.secretRefs"
                 :config-dir="config.agent.configDir"
               />
-              <ResourcesPanel v-else :settings="settings" />
+              <ResourcesPanel v-else :settings="settings" @change="applySettingsDraft" />
             </template>
           </div>
         </section>
@@ -420,7 +452,7 @@ onMounted(() => load());
       v-model:open="jsonOpen"
       title="高级 JSON"
       placement="right"
-      :width="520"
+      :width="680"
       destroy-on-close
     >
       <JsonInspector

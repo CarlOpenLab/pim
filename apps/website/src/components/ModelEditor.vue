@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { TriangleAlert } from "@lucide/vue";
-import message from "antdv-next/dist/message/index";
+import { message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import type { ModelConfiguration, ModelCost, ProviderApi } from "../types.ts";
 

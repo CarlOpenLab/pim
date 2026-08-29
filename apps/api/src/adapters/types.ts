@@ -100,6 +100,22 @@ export interface SaveResult {
   path: string;
   backupPath: string | null;
   savedAt: string;
+  /**
+   * Keys the write moved out of the file into the agent runtime's own config store
+   * (OMP persists `modelRoles` etc. via `omp config set`). Reported so the UI can
+   * tell the user their settings.json was reshaped, not silently rewritten.
+   */
+  migratedKeys?: string[];
+}
+
+/** A persona template an agent can activate through `roles` / `activeRole`. */
+export interface RolePreset {
+  id: string;
+  label: string;
+  description: string;
+  prompt: string;
+  icon: string;
+  accent: string;
 }
 
 export interface AgentAdapter {
@@ -119,4 +135,11 @@ export interface AgentAdapter {
    * whenever a vendor ships, so the UI offers a manual refresh instead of hardcoding them).
    */
   refreshPresets?(): Promise<ProviderPreset[]>;
+  /** Optional: persona templates the UI renders in the persona tab. */
+  getRolePresets?(): RolePreset[];
+  /** Optional: models the agent runtime itself reports as selectable (e.g. `omp models`). */
+  getAvailableModels?(): Promise<unknown[]>;
+  /** Optional: role→model bindings the runtime stores outside settings.json. */
+  getModelRoles?(): Promise<Record<string, string>>;
+  setModelRoles?(roles: Record<string, string>): Promise<Record<string, string>>;
 }

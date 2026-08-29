@@ -8,7 +8,6 @@ import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
 import { OmpAdapter } from "./adapters/omp.js";
 import { PiAdapter } from "./adapters/pi.js";
-import { ompRolePresets } from "./presets/omp.js";
 import type { AgentAdapter, ModelsConfiguration } from "./adapters/types.js";
 
 const app = new Hono();
@@ -138,37 +137,33 @@ app.post("/api/agents/:id/presets/refresh", async (context) => {
 app.get("/api/agents/:id/role-presets", (context) => {
   const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
-  if (adapter.id !== "omp") return context.json({ presets: [] });
-  return context.json({ presets: ompRolePresets });
+  return context.json({ presets: adapter.getRolePresets?.() ?? [] });
 });
 
 app.get("/api/agents/:id/available-models", async (context) => {
-  const adapter = adapters.get(context.req.param("id")) as OmpAdapter | undefined;
+  const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
-  if (adapter.id !== "omp" || typeof (adapter as any).getAvailableModels !== "function")
-    return context.json({ models: [] });
-  return context.json({ models: await (adapter as any).getAvailableModels() });
+  if (!adapter.getAvailableModels) return context.json({ models: [] });
+  return context.json({ models: await adapter.getAvailableModels() });
 });
 
 app.get("/api/agents/:id/model-roles", async (context) => {
-  const adapter = adapters.get(context.req.param("id")) as OmpAdapter | undefined;
+  const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
-  if (adapter.id !== "omp" || typeof (adapter as any).getModelRoles !== "function")
-    return context.json({ roles: {} });
-  return context.json({ roles: await (adapter as any).getModelRoles() });
+  if (!adapter.getModelRoles) return context.json({ roles: {} });
+  return context.json({ roles: await adapter.getModelRoles() });
 });
 
 app.put("/api/agents/:id/model-roles", async (context) => {
-  const adapter = adapters.get(context.req.param("id")) as OmpAdapter | undefined;
+  const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
-  if (adapter.id !== "omp" || typeof (adapter as any).setModelRoles !== "function")
-    return context.json({ error: "该 Agent 不支持 modelRoles" }, 400);
+  if (!adapter.setModelRoles) return context.json({ error: "该 Agent 不支持 modelRoles" }, 400);
   const body = await context.req.json().catch(() => ({}));
   const roles = (body as any).roles ?? (body as any).modelRoles ?? body;
   if (!roles || typeof roles !== "object" || Array.isArray(roles))
     return context.json({ error: 'roles 需为对象：{ role: "provider/model:thinking" }' }, 400);
   try {
-    const saved = await (adapter as any).setModelRoles(roles);
+    const saved = await adapter.setModelRoles(roles);
     return context.json({ roles: saved });
   } catch (error) {
     return context.json(

@@ -8,8 +8,7 @@ export type ViewId =
   | "roles"
   | "modelRoles"
   | "model"
-  | "persona"
-  | "terminal";
+  | "persona";
 export interface OmpAvailableModel {
   provider: string;
   id: string;
@@ -150,4 +149,6 @@ export interface SaveResult {
   path: string;
   backupPath: string | null;
   savedAt: string;
+  /** Keys the write moved into the agent runtime's own config store (e.g. omp config). */
+  migratedKeys?: string[];
 }

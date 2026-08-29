@@ -189,12 +189,6 @@ async function writeOmpModelRoles(roles: Record<string, string>): Promise<void> 
   await execFileAsync("omp", ["config", "set", "modelRoles", payload], { timeout: 5000 });
 }
 
-async function writeOmpCycleOrder(order: string[]): Promise<void> {
-  await execFileAsync("omp", ["config", "set", "cycleOrder", JSON.stringify(order)], {
-    timeout: 5000,
-  });
-}
-
 async function writeOmpConfig(key: string, value: unknown): Promise<void> {
   const payload = typeof value === "string" ? value : JSON.stringify(value);
   await execFileAsync("omp", ["config", "set", key, payload], { timeout: 5000 });
@@ -306,6 +300,7 @@ export class OmpAdapter implements AgentAdapter {
         "providers",
         "models",
         "persona",
+        "credentials",
         // legacy aliases kept hidden but do not drive tabs
         "modelRoles",
         "roles",
@@ -378,12 +373,16 @@ export class OmpAdapter implements AgentAdapter {
     }
 
     const credentials: CredentialStatus[] = Object.entries(auth.data).map(([provider, value]) => {
+      const credential = recordSchema.safeParse(value);
+      const data = credential.success ? credential.data : {};
       return {
         provider,
-        type: typeof d.type === "string" ? d.type : "unknown",
-        configured: typeof d.key === "string" || d.type === "oauth",
+        type: typeof data.type === "string" ? data.type : "unknown",
+        configured: typeof data.key === "string" || data.type === "oauth",
         environmentKeys:
-          d.env && typeof d.env === "object" ? Object.keys(d.env as Record<string, unknown>) : [],
+          data.env && typeof data.env === "object"
+            ? Object.keys(data.env as Record<string, unknown>)
+            : [],
       };
     });
 
@@ -410,13 +409,6 @@ export class OmpAdapter implements AgentAdapter {
     const modelRoles = parsed.modelRoles as Record<string, string> | undefined;
     const cycleOrder = parsed.cycleOrder as string[] | undefined;
 
-    if (modelRoles !== undefined) {
-      await writeOmpModelRoles(modelRoles);
-    }
-    if (cycleOrder !== undefined) {
-      await writeOmpCycleOrder(cycleOrder);
-    }
-
     // 除 modelRoles/cycleOrder 外，omp 原生配置也应通过 `omp config set` 写入，
     // 否则下拉显示恢复成空（原实现只写 settings.json，omp 根本不读）
     const ompDirectKeys: Record<string, true> = {
@@ -435,9 +427,25 @@ export class OmpAdapter implements AgentAdapter {
         }
       }
     }
+
+    // `omp config set` is per-key, so one save spawns several processes. Failures are
+    // collected instead of aborting mid-way, and reported together afterwards.
+    const failures: string[] = [];
+    const trySet = async (key: string, value: unknown) => {
+      try {
+        await writeOmpConfig(key, value);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        failures.push(`${key}（${reason.trim()}）`);
+      }
+    };
+    if (modelRoles !== undefined) await trySet("modelRoles", modelRoles);
+    if (cycleOrder !== undefined) await trySet("cycleOrder", cycleOrder);
     for (const [k, v] of pendingWrites) {
-      await writeOmpConfig(k, v);
+      await trySet(k, v);
     }
+    if (failures.length > 0)
+      throw new Error(`以下配置写入 omp config 失败：${failures.join("；")}`);
 
     const rest = { ...parsed };
     delete rest.modelRoles;
@@ -459,10 +467,21 @@ export class OmpAdapter implements AgentAdapter {
       scope === "global"
         ? join(this.configDir, "settings.json")
         : join(root, ".omp", "settings.json");
+
+    // Keys that used to live in settings.json but are now stored by the omp runtime:
+    // reported back so the UI can say the file was reshaped instead of silently rewritten.
+    const previous = await readJsonDocument(path, {}, (value) => recordSchema.parse(value));
+    const runtimeKeys = new Set<string>(["modelRoles", "cycleOrder", "compaction", "retry"]);
+    for (const key of Object.keys(ompDirectKeys)) runtimeKeys.add(key);
+    const migratedKeys = Object.keys(previous.data).filter(
+      (key) => !(key in rest) && runtimeKeys.has(key),
+    );
+
     if (Object.keys(rest).length === 0) {
-      return { path, backupPath: null, savedAt: new Date().toISOString() };
+      return { path, backupPath: null, savedAt: new Date().toISOString(), migratedKeys };
     }
-    return writeJsonAtomic(path, rest);
+    const result = await writeJsonAtomic(path, rest);
+    return migratedKeys.length ? { ...result, migratedKeys } : result;
   }
   async writeModels(value: ModelsConfiguration): Promise<SaveResult> {
     const parsed = modelsSchema.parse(value) as ModelsConfiguration;

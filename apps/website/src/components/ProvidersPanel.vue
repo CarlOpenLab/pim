@@ -8,7 +8,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "@lucide/vue";
-import message from "antdv-next/dist/message/index";
+import { message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import type { ModelIssue } from "../model-validation.ts";
 import ModelEditor from "./ModelEditor.vue";
@@ -27,7 +27,24 @@ const props = defineProps<{
   issues: ModelIssue[];
   presetsRefreshing?: boolean;
 }>();
-const emit = defineEmits<{ "refresh-presets": [] }>();
+const emit = defineEmits<{ "refresh-presets": []; change: [value: ModelsConfiguration] }>();
+
+/** Plain JSON round trip: detaches copies from reactive proxies and props. */
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Working copy: every edit lands here and is emitted upward; props stay untouched. */
+const working = ref(clone(props.models));
+watch(
+  () => props.models,
+  (value) => {
+    if (JSON.stringify(value) !== JSON.stringify(working.value)) working.value = clone(value);
+  },
+  { deep: true },
+);
+watch(working, (value) => emit("change", clone(value)), { deep: true });
+
 const selectedId = ref("");
 const addOpen = ref(false);
 const addMode = ref<"preset" | "manual">("preset");
@@ -46,8 +63,8 @@ const modelColumns = [
   { title: "", key: "actions", width: 84 },
 ];
 
-const providerIds = computed(() => Object.keys(props.models.providers).sort());
-const provider = computed(() => props.models.providers[selectedId.value]);
+const providerIds = computed(() => Object.keys(working.value.providers).sort());
+const provider = computed(() => working.value.providers[selectedId.value]);
 const providerSegmentOptions = computed(() =>
   providerIds.value.map((id) => ({ label: id, value: id })),
 );
@@ -122,25 +139,17 @@ watch(importPresetId, () => {
   importSelection.value = [];
 });
 
-/**
- * Presets arrive as reactive proxies, which `structuredClone` refuses to copy. Everything
- * here is plain JSON, so a round trip both detaches the copy and drops the proxy.
- */
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 function createProvider(id: string, value: ModelsConfiguration["providers"][string]): boolean {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id)) {
     message.error("Provider ID 只能包含字母、数字、点、斜杠、下划线或连字符");
     return false;
   }
-  if (props.models.providers[id]) {
+  if (working.value.providers[id]) {
     message.error("该 Provider 已存在");
     return false;
   }
 
-  props.models.providers[id] = value;
+  working.value.providers[id] = value;
   selectedId.value = id;
   addOpen.value = false;
   return true;
@@ -156,7 +165,7 @@ function addProviderFromPreset() {
 
   const id = draftId.value.trim() || preset.id;
   // 已存在则直接切换过去，而不是假死
-  if (props.models.providers[id]) {
+  if (working.value.providers[id]) {
     selectedId.value = id;
     addOpen.value = false;
     message.info(
@@ -177,7 +186,7 @@ function addProviderFromPreset() {
     );
 }
 function removeProvider() {
-  delete props.models.providers[selectedId.value];
+  delete working.value.providers[selectedId.value];
 }
 
 /** Drops the literal value so the next save writes a reference instead. */
@@ -455,7 +464,7 @@ function modelRowKey(model: ModelConfiguration) {
             <div class="preset-item-body">
               <div class="preset-item-head">
                 <a-typography-text strong>{{ preset.label }}</a-typography-text>
-                <a-tag v-if="props.models.providers[preset.id]" color="green">已添加</a-tag>
+                <a-tag v-if="working.providers[preset.id]" color="green">已添加</a-tag>
                 <a-tag v-else-if="preset.models.length">{{ preset.models.length }} 个模型</a-tag>
                 <a-tag v-else color="default">仅连接信息</a-tag>
               </div>
@@ -469,7 +478,7 @@ function modelRowKey(model: ModelConfiguration) {
         <a-form layout="vertical" class="preset-form">
           <a-form-item
             label="Provider ID"
-            :extra="`留空则使用 ${draftPresetId}${props.models.providers[draftPresetId] ? '（已存在，点击添加将切换过去）' : ''}`"
+            :extra="`留空则使用 ${draftPresetId}${working.providers[draftPresetId] ? '（已存在，点击添加将切换过去）' : ''}`"
           >
             <a-input v-model:value="draftId" :placeholder="draftPresetId" />
           </a-form-item>

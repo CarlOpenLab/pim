@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Copy, Crown, Plus, Save, Sparkles, Trash2, Zap } from "@lucide/vue";
+import { Copy, Crown, PencilLine, Plus, Save, Sparkles, Trash2, Zap } from "@lucide/vue";
 import { message } from "antdv-next";
 import type { OmpAvailableModel } from "../types.ts";
 
@@ -8,6 +8,8 @@ const props = defineProps<{
   modelRoles: Record<string, string>;
   availableModels: OmpAvailableModel[];
   loading?: boolean;
+  /** True while the parent is persisting, so the save button reflects the real request. */
+  saving?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -96,7 +98,19 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 
 const draft = ref<Record<string, string>>({});
 const newRoleId = ref("");
-const saving = ref(false);
+/** Per-role toggle between the model dropdown and free-text input for custom selectors. */
+const manualMode = ref<Record<string, boolean>>({});
+
+function isManualMode(role: string): boolean {
+  if (manualMode.value[role] !== undefined) return manualMode.value[role];
+  // 已保存的自定义 selector 不在可选列表里时，默认落在手输模式，避免看起来丢了值
+  const selector = parse(draft.value[role] ?? "").selector;
+  return Boolean(selector) && !getModelInfo(selector);
+}
+
+function toggleManualMode(role: string) {
+  manualMode.value = { ...manualMode.value, [role]: !isManualMode(role) };
+}
 
 watch(
   () => props.modelRoles,
@@ -278,17 +292,19 @@ async function handleSave() {
       return;
     }
   }
-  saving.value = true;
-  try {
-    emit("save", { ...draft.value });
-  } finally {
-    saving.value = false;
-  }
+  emit("save", { ...draft.value });
 }
 
 function copySelector(selector: string) {
   navigator.clipboard.writeText(selector);
   message.success("已复制");
+}
+
+/** "$in/$out" per token row; both-zero means the provider charges nothing (显示“免费”). */
+function costSummary(cost?: { input?: number; output?: number }): string {
+  if (typeof cost?.input !== "number" && typeof cost?.output !== "number") return "—";
+  if (!cost.input && !cost.output) return "免费";
+  return `$${cost.input ?? 0} / $${cost.output ?? 0}`;
 }
 
 const searchQuery = ref("");
@@ -395,9 +411,11 @@ function assignToRole(selector: string, role: string) {
           <div class="role-field model-field">
             <span class="field-label">模型</span>
             <a-select
+              v-if="!isManualMode(role)"
               :value="parse(draft[role] ?? '').selector || undefined"
               placeholder="选择模型"
               show-search
+              allow-clear
               :filter-option="
                 (input: string, option: any) =>
                   String(option.value).toLowerCase().includes(input.toLowerCase()) ||
@@ -407,23 +425,13 @@ function assignToRole(selector: string, role: string) {
               :options="modelOptions"
               :not-found-content="
                 availableModels.length
-                  ? '无匹配模型，可试试下方自定义输入'
+                  ? '无匹配模型，可切换到手输自定义'
                   : '暂无可用模型，请先 omp models refresh 或在下方表格搜索添加'
               "
-              @change="(v: string) => handleSelectorChange(role, v)"
+              @change="(v: string) => handleSelectorChange(role, v ?? '')"
             />
-            <a-tooltip v-if="parse(draft[role] ?? '').selector" title="复制 selector"
-              ><a-button
-                type="text"
-                size="small"
-                class="copy-btn"
-                @click="copySelector(parse(draft[role] ?? '').selector)"
-                ><Copy :size="14" /></a-button
-            ></a-tooltip>
-          </div>
-          <div class="role-field custom-field">
-            <span class="field-label">自定义</span>
             <a-input
+              v-else
               :value="parse(draft[role] ?? '').selector"
               placeholder="provider/model · 可手输自定义模型"
               allow-clear
@@ -432,6 +440,19 @@ function assignToRole(selector: string, role: string) {
                 (v: string) => handleSelectorChange(role, (v as unknown as string) || '')
               "
             />
+            <a-tooltip :title="isManualMode(role) ? '切换为下拉选择' : '切换为手输 selector'">
+              <a-button type="text" size="small" class="mode-btn" @click="toggleManualMode(role)"
+                ><PencilLine :size="14"
+              /></a-button>
+            </a-tooltip>
+            <a-tooltip v-if="parse(draft[role] ?? '').selector" title="复制 selector"
+              ><a-button
+                type="text"
+                size="small"
+                class="copy-btn"
+                @click="copySelector(parse(draft[role] ?? '').selector)"
+                ><Copy :size="14" /></a-button
+            ></a-tooltip>
           </div>
 
           <div class="role-field thinking-field">
@@ -460,7 +481,8 @@ function assignToRole(selector: string, role: string) {
             <span class="info-dot">·</span>
             <span class="info-ctx"
               >{{
-                getModelInfo(parse(draft[role] ?? "").selector)?.contextWindow?.toLocaleString()
+                getModelInfo(parse(draft[role] ?? "").selector)?.contextWindow?.toLocaleString() ??
+                "—"
               }}
               上下文</span
             >
@@ -469,11 +491,7 @@ function assignToRole(selector: string, role: string) {
               class="info-cost"
               :title="String(getModelInfo(parse(draft[role] ?? '').selector)?.cost ?? '')"
             >
-              {{
-                getModelInfo(parse(draft[role] ?? "").selector)?.cost
-                  ? `$${getModelInfo(parse(draft[role] ?? "").selector)?.cost?.input}/$${getModelInfo(parse(draft[role] ?? "").selector)?.cost?.output}`
-                  : "—"
-              }}
+              {{ costSummary(getModelInfo(parse(draft[role] ?? "").selector)?.cost) }}
             </span>
             <a-tag
               v-if="getModelInfo(parse(draft[role] ?? '').selector)?.reasoning"
@@ -587,12 +605,7 @@ function assignToRole(selector: string, role: string) {
             >
           </template>
           <template v-else-if="column.key === 'cost'">
-            <span v-if="(record as OmpAvailableModel).cost" class="cell-cost"
-              >${{ (record as OmpAvailableModel).cost?.input }}/ ${{
-                (record as OmpAvailableModel).cost?.output
-              }}</span
-            >
-            <span v-else>—</span>
+            <span class="cell-cost">{{ costSummary((record as OmpAvailableModel).cost) }}</span>
           </template>
           <template v-else-if="column.key === 'actions'">
             <div class="cell-actions">
@@ -781,10 +794,7 @@ function assignToRole(selector: string, role: string) {
   min-width: 0;
 }
 .model-field {
-  grid-template-columns: 36px minmax(0, 1fr) 28px;
-}
-.custom-field {
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr) 24px 24px;
 }
 .custom-input {
   min-width: 0;
