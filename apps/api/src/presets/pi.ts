@@ -6,6 +6,7 @@
  * Costs are US dollars per million tokens. Anthropic cache rates follow the published
  * multipliers: reads at 0.1x input, 5-minute writes at 1.25x input.
  */
+import { commandCodeGoatPreset } from "./command-code-goat.js";
 import { openCodeGoPreset } from "./opencode-go.js";
 import type { ProviderPreset } from "./types.js";
 
@@ -142,6 +143,7 @@ export const piModelPresets: ProviderPreset[] = [
     ],
   },
   openCodeGoPreset,
+  commandCodeGoatPreset,
   {
     id: "openai",
     label: "OpenAI",

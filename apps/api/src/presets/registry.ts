@@ -5,8 +5,9 @@
  * catalog, an optional upstream rebuild for the entry whose models/prices drift, and where
  * a refreshed entry is cached under that agent's own config directory. The HTTP layer talks
  * only to `PresetRegistry`, never to an agent adapter, so preset wiring is independent of
- * configuration I/O — and catalogs can share an entry (the OpenCode Go subscription is
- * offered by both Pi and OMP) without one agent's code importing another's.
+ * configuration I/O — and catalogs can share entries (the OpenCode Go subscription with
+ * its upstream refresh, and the Command Code GOAT snapshot) without one agent's code
+ * importing another's.
  *
  * A catalog is always the shipped baseline merged with the newest readable cached refresh:
  * the cached entry replaces the baseline row with the same id (or is appended for an id the
@@ -14,6 +15,7 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { commandCodeGoatPreset } from "./command-code-goat.js";
 import { ompModelPresets } from "./omp.js";
 import { openCodeGoPreset, refreshOpenCodeGoPreset } from "./opencode-go.js";
 import { piModelPresets } from "./pi.js";
@@ -103,10 +105,12 @@ function openCodeGoCacheFile(configDir: string): string {
 }
 
 /**
- * The shipped registry: Pi's catalog is its own built-ins (the OpenCode Go entry included),
- * OMP's is its own built-ins plus the shared OpenCode Go entry appended. Both can rebuild
- * that entry from the live docs and cache it under their own config directory; OMP falls
- * back to a refresh Pi already cached so a catalog refreshed once shows up for both.
+ * The shipped registry: Pi's catalog is its own built-ins (the OpenCode Go and Command Code
+ * GOAT entries included), OMP's is its own built-ins plus the same two shared entries
+ * appended. Both can rebuild the OpenCode Go entry from the live docs and cache it under
+ * their own config directory; OMP falls back to a refresh Pi already cached so a catalog
+ * refreshed once shows up for both. The Command Code GOAT entry is a shipped snapshot
+ * without an upstream refresh.
  */
 export function createPresetRegistry(config: {
   piConfigDir: string;
@@ -120,7 +124,7 @@ export function createPresetRegistry(config: {
       cacheFile: piCacheFile,
     },
     omp: {
-      builtin: [...ompModelPresets, openCodeGoPreset],
+      builtin: [...ompModelPresets, openCodeGoPreset, commandCodeGoatPreset],
       refresh: { rebuild: refreshOpenCodeGoPreset },
       cacheFile: openCodeGoCacheFile(config.ompConfigDir),
       fallbackCacheFiles: [piCacheFile],

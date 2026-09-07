@@ -37,7 +37,9 @@ agent's own config directory. `GET /api/agents/:id/model-presets` and
 `POST /api/agents/:id/presets/refresh` talk only to that registry. A catalog is the shipped
 baseline merged with the newest cached refresh; the shared OpenCode Go entry lives in
 `apps/api/src/presets/opencode-go.ts` (snapshot and refresh together) and is included by
-every catalog that offers it, so a refresh or a fix lands once.
+every catalog that offers it, so a refresh or a fix lands once. The Command Code GOAT entry
+in `apps/api/src/presets/command-code-goat.ts` is a second shared snapshot offered to both Pi
+and OMP; it has no upstream refresh source, so its catalog changes with code.
 
 Presets are starting points, not a source of truth: connection fields are the durable part,
 while model IDs and prices move whenever a vendor ships, so the UI tells the user to verify

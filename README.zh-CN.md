@@ -24,7 +24,7 @@ PIM 将其 API 绑定到 `127.0.0.1`。
 
 ## 模型预设
 
-模型预设是独立层,不属于适配器。凡是提供服务商模板的 Agent,都在 `apps/api/src/presets/registry.ts` 中声明一个数据源——内置目录、可选的上游重建源、以及刷新条目缓存在该 Agent 自己配置目录下的位置。`GET /api/agents/:id/model-presets` 与 `POST /api/agents/:id/presets/refresh` 只与这个注册表通信。目录始终等于「出厂基线 + 最新可读的缓存刷新」:同 id 的刷新条目原位替换基线,其余保持不变。共享的 OpenCode Go 条目连同其快照与刷新逻辑一起放在 `apps/api/src/presets/opencode-go.ts`,凡提供该订阅的目录都引用它,因此一次刷新或修复只落一处。
+模型预设是独立层,不属于适配器。凡是提供服务商模板的 Agent,都在 `apps/api/src/presets/registry.ts` 中声明一个数据源——内置目录、可选的上游重建源、以及刷新条目缓存在该 Agent 自己配置目录下的位置。`GET /api/agents/:id/model-presets` 与 `POST /api/agents/:id/presets/refresh` 只与这个注册表通信。目录始终等于「出厂基线 + 最新可读的缓存刷新」:同 id 的刷新条目原位替换基线,其余保持不变。共享的 OpenCode Go 条目连同其快照与刷新逻辑一起放在 `apps/api/src/presets/opencode-go.ts`,凡提供该订阅的目录都引用它,因此一次刷新或修复只落一处。Command Code GOAT 作为共享快照条目放在 `apps/api/src/presets/command-code-goat.ts`,同样同时提供给 Pi 与 OMP;它没有官方文档刷新源,目录改动随代码更新。
 
 预设是起点而非事实来源:连接字段是持久部分,而模型 ID 与价格会随厂商发布而变动,因此 UI 会提示用户校验导入内容。预设绝不携带密钥值——只有 `$VAR_NAME` 引用,`apps/api/tests/model-presets.test.ts` 会连同写入 Schema 一并断言这一点。
 

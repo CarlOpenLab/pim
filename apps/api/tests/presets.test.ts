@@ -2,6 +2,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { commandCodeGoatPreset } from "../src/presets/command-code-goat.ts";
 import { ompModelPresets } from "../src/presets/omp.ts";
 import { openCodeGoPreset } from "../src/presets/opencode-go.ts";
 import { piModelPresets } from "../src/presets/pi.ts";
@@ -59,11 +60,13 @@ describe("PresetRegistry", () => {
     const { registry } = await setupRegistry();
 
     await expect(registry.modelPresetsFor("pi")).resolves.toEqual(piModelPresets);
-    // OMP's catalog is its own providers plus the shared OpenCode Go entry, appended.
+    // OMP's catalog is its own providers plus the two shared entries appended:
+    // the OpenCode Go subscription and the Command Code GOAT snapshot.
     const ompCatalog = await registry.modelPresetsFor("omp");
     expect(ompCatalog.slice(0, ompModelPresets.length)).toEqual(ompModelPresets);
-    expect(ompCatalog[ompCatalog.length - 1]).toEqual(openCodeGoPreset);
-    expect(ompCatalog).toHaveLength(ompModelPresets.length + 1);
+    expect(ompCatalog[ompCatalog.length - 2]).toEqual(openCodeGoPreset);
+    expect(ompCatalog[ompCatalog.length - 1]).toEqual(commandCodeGoatPreset);
+    expect(ompCatalog).toHaveLength(ompModelPresets.length + 2);
   });
 
   test("returns empty for agents that ship no model presets", async () => {
