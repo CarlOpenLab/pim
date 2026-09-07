@@ -9,6 +9,7 @@ import { z } from "zod";
 import { OmpAdapter } from "./adapters/omp.js";
 import { PiAdapter } from "./adapters/pi.js";
 import type { AgentAdapter, ModelsConfiguration } from "./adapters/types.js";
+import { createPresetRegistry } from "./presets/registry.js";
 
 const app = new Hono();
 const pi = new PiAdapter();
@@ -17,6 +18,12 @@ const adapters = new Map<string, AgentAdapter>([
   [pi.id, pi],
   [omp.id, omp],
 ]);
+// Model presets live in their own layer: each agent declares a preset source (built-ins,
+// refresh source, cache dir), and the routes below only ever talk to this registry.
+const presetRegistry = createPresetRegistry({
+  piConfigDir: pi.configDir,
+  ompConfigDir: omp.configDir,
+});
 
 function findDefaultProjectPath(): string {
   if (process.env.PIM_PROJECT_ROOT) return resolve(process.env.PIM_PROJECT_ROOT);
@@ -113,23 +120,23 @@ app.get("/api/agents/:id/model-presets", async (context) => {
   const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
 
-  return context.json({ presets: (await adapter.modelPresets?.()) ?? [] });
+  return context.json({ presets: await presetRegistry.modelPresetsFor(adapter.id) });
 });
 
 /**
  * Vendors ship models and change prices often, so the UI offers a manual refresh instead
- * of forcing every new model into a code change. The adapter decides what it can rebuild
- * from upstream docs; adapters without a source return 400.
+ * of forcing every new model into a code change. The preset source decides what it can
+ * rebuild from upstream docs; sources without one reject with the same 400.
  */
 app.post("/api/agents/:id/presets/refresh", async (context) => {
   const adapter = adapters.get(context.req.param("id"));
   if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
-  if (!adapter.refreshPresets) return context.json({ error: "该 Agent 不支持从文档刷新预设" }, 400);
 
   try {
-    return context.json({ presets: await adapter.refreshPresets() });
+    return context.json({ presets: await presetRegistry.refreshPresetsFor(adapter.id) });
   } catch (error) {
-    // Network failures and refactored docs pages are user input problems, not server faults.
+    // Network failures, refactored docs pages, and unsupported sources are user input
+    // problems, not server faults.
     return context.json({ error: error instanceof Error ? error.message : "刷新预设失败" }, 400);
   }
 });

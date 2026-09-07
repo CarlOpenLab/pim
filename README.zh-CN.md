@@ -24,15 +24,17 @@ PIM 将其 API 绑定到 `127.0.0.1`。
 
 ## 模型预设
 
-`apps/api/src/presets/pi.ts` 保存了 `GET /api/agents/:id/model-presets` 提供的服务商模板。它们是起点而非事实来源:连接字段是持久部分,而模型 ID 与价格会随厂商发布而变动,因此 UI 会提示用户校验导入内容。预设绝不携带密钥值——只有 `$VAR_NAME` 引用,`apps/api/tests/model-presets.test.ts` 会连同写入 Schema 一并断言这一点。
+模型预设是独立层,不属于适配器。凡是提供服务商模板的 Agent,都在 `apps/api/src/presets/registry.ts` 中声明一个数据源——内置目录、可选的上游重建源、以及刷新条目缓存在该 Agent 自己配置目录下的位置。`GET /api/agents/:id/model-presets` 与 `POST /api/agents/:id/presets/refresh` 只与这个注册表通信。目录始终等于「出厂基线 + 最新可读的缓存刷新」:同 id 的刷新条目原位替换基线,其余保持不变。共享的 OpenCode Go 条目连同其快照与刷新逻辑一起放在 `apps/api/src/presets/opencode-go.ts`,凡提供该订阅的目录都引用它,因此一次刷新或修复只落一处。
+
+预设是起点而非事实来源:连接字段是持久部分,而模型 ID 与价格会随厂商发布而变动,因此 UI 会提示用户校验导入内容。预设绝不携带密钥值——只有 `$VAR_NAME` 引用,`apps/api/tests/model-presets.test.ts` 会连同写入 Schema 一并断言这一点。
 
 编辑在两处进行。模型表格覆盖值得在目录中横向扫描的字段;单模型抽屉覆盖其余所有字段,其中 `compat` 作为 JSON 字段保留,因为其键由服务商决定。`apps/website/src/model-validation.ts` 运行与 API 写入时相同的规则,因此不完整的行会被就地指出,而非以 Schema 错误的形式返回。
 
-预设也可以不经过代码改动直接从官方文档重建。模型目录卡片上有「刷新预设」按钮(`POST /api/agents/:id/presets/refresh`,由 `apps/api/src/presets/opencode-go.ts` 实现);它会重新抓取 OpenCode Go 文档,解析模型 ID、接口形态与每百万 Token 价格,并把结果缓存在 Agent 配置目录下,重启后仍然有效。未实现 `refreshPresets()` 的适配器不会显示该按钮。
+预设也可以不经过代码改动直接从官方文档重建。模型目录卡片上有「刷新预设」按钮(`POST /api/agents/:id/presets/refresh`,由 `apps/api/src/presets/opencode-go.ts` 实现);它会重新抓取 OpenCode Go 文档,解析模型 ID、接口形态与每百万 Token 价格,并把结果缓存在 Agent 配置目录下,重启后仍然有效。OMP 会回退读取 Pi 已缓存的刷新结果,因此一次刷新在两个 Agent 中都可见。没有刷新源的 Agent 会得到 400,且不显示该按钮。
 
 ## 新增 Agent
 
-`AgentAdapter`(`apps/api/src/adapters/types.ts`)是 Agent 唯一需要实现的内容。在 `pi.ts` 旁实现它,在 `apps/api/src/index.ts` 的 `adapters` 映射中注册,并声明其 `capabilities`——UI 从 `GET /api/agents` 推导 Agent 导航栏及其标签页,因此无需改动前端。`modelPresets` 为可选项;省略它的适配器只会得到一个纯手动的添加流程。
+配置读写方面,`AgentAdapter`(`apps/api/src/adapters/types.ts`)是 Agent 唯一需要实现的内容。在 `pi.ts` 旁实现它,在 `apps/api/src/index.ts` 的 `adapters` 映射中注册,并声明其 `capabilities`——UI 从 `GET /api/agents` 推导 Agent 导航栏及其标签页,因此无需改动前端。若要同时提供模型服务商模板,在 `apps/api/src/presets/registry.ts` 中为该 Agent 添加一条 `ModelPresetSource`;省略它的 Agent 只会得到一个纯手动的添加流程。人格模板仍留在适配器层,通过 `getRolePresets()` 提供。
 
 ## 开发
 

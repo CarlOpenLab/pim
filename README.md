@@ -30,12 +30,19 @@ PIM binds its API to `127.0.0.1`.
 
 ## Model presets
 
-`apps/api/src/presets/pi.ts` holds the provider templates served by
-`GET /api/agents/:id/model-presets`. They are a starting point, not a source of truth: the
-connection fields are the durable part, while model IDs and prices move whenever a vendor ships,
-so the UI tells the user to verify whatever it imported. A preset never carries a key value — only
-a `$VAR_NAME` reference, which `apps/api/tests/model-presets.test.ts` asserts along with the write
-schema.
+Model presets are a self-contained layer, not part of the adapters. Each agent that ships
+provider templates declares a source in `apps/api/src/presets/registry.ts` — its built-in
+catalog, an optional upstream rebuild, and where a refreshed entry is cached under the
+agent's own config directory. `GET /api/agents/:id/model-presets` and
+`POST /api/agents/:id/presets/refresh` talk only to that registry. A catalog is the shipped
+baseline merged with the newest cached refresh; the shared OpenCode Go entry lives in
+`apps/api/src/presets/opencode-go.ts` (snapshot and refresh together) and is included by
+every catalog that offers it, so a refresh or a fix lands once.
+
+Presets are starting points, not a source of truth: connection fields are the durable part,
+while model IDs and prices move whenever a vendor ships, so the UI tells the user to verify
+whatever it imported. A preset never carries a key value — only a `$VAR_NAME` reference,
+which `apps/api/tests/model-presets.test.ts` asserts along with the write schema.
 
 Editing happens in two places. The model table covers the fields worth scanning across a catalog;
 the per-model drawer covers everything else, with `compat` left as a JSON field because its keys
@@ -46,16 +53,19 @@ Presets can also be rebuilt from upstream docs without a code change. The model 
 「刷新预设」button (`POST /api/agents/:id/presets/refresh`, backed by
 `apps/api/src/presets/opencode-go.ts`); it re-reads the OpenCode Go docs, re-parses the model IDs,
 endpoints and per-million-token prices, and caches the result in the agent config directory so the
-fresh catalog survives restarts. Adapters that do not opt into `refreshPresets()` simply hide the
+fresh catalog survives restarts. OMP falls back to a refresh Pi already cached, so a catalog
+refreshed once shows up for both. Agents without a refresh source get a 400 and simply hide the
 button.
 
 ## Adding an agent
 
-`AgentAdapter` (`apps/api/src/adapters/types.ts`) is the only thing an agent needs. Implement it
-next to `pi.ts`, register it in the `adapters` map in `apps/api/src/index.ts`, and declare its
-`capabilities` — the UI derives the agent rail and its tabs from `GET /api/agents`, so no frontend
-change is required. `modelPresets` is optional; an adapter that omits it just gets a manual-only
-add flow.
+`AgentAdapter` (`apps/api/src/adapters/types.ts`) is the only thing an agent needs for
+configuration I/O. Implement it next to `pi.ts`, register it in the `adapters` map in
+`apps/api/src/index.ts`, and declare its `capabilities` — the UI derives the agent rail and its
+tabs from `GET /api/agents`, so no frontend change is required. To also ship model provider
+templates, add a `ModelPresetSource` entry for the agent in `apps/api/src/presets/registry.ts`;
+agents without one just get a manual-only add flow. Persona templates stay adapter-level via
+`getRolePresets()`.
 
 ## Development
 

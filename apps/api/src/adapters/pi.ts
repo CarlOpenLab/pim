@@ -1,11 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { refreshOpenCodeGoPreset } from "../presets/opencode-go.js";
-import { piModelPresets } from "../presets/pi.js";
 import {
   assertNoLiteralSecrets,
   collectSecretReferences,
@@ -20,7 +17,6 @@ import type {
   ConfigScope,
   CredentialStatus,
   ModelsConfiguration,
-  ProviderPreset,
   SaveResult,
 } from "./types.js";
 
@@ -142,42 +138,9 @@ export function restoreSecrets(
   return restoreRedactions(next, previous) as ModelsConfiguration;
 }
 
-function clonePreset(value: ProviderPreset): ProviderPreset {
-  return JSON.parse(JSON.stringify(value)) as ProviderPreset;
-}
-
-async function readCachedPreset(path: string): Promise<ProviderPreset | null> {
-  try {
-    return JSON.parse(await readFile(path, "utf8")) as ProviderPreset;
-  } catch {
-    return null;
-  }
-}
-
-async function persistPresetCache(path: string, preset: ProviderPreset): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(preset, null, 2)}\n`, "utf8");
-}
-
-/** A refreshed preset replaces its shipped snapshot; the rest stay untouched. */
-function mergeCachedPreset(
-  baseline: ProviderPreset[],
-  cached: ProviderPreset | null,
-): ProviderPreset[] {
-  if (!cached) return baseline;
-  const index = baseline.findIndex((preset) => preset.id === cached.id);
-  if (index < 0) return [...baseline, clonePreset(cached)];
-  const next = baseline.map(clonePreset);
-  next[index] = clonePreset(cached);
-  return next;
-}
-
 export class PiAdapter implements AgentAdapter {
   readonly id = "pi" as const;
-  private readonly configDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-  private get presetCachePath(): string {
-    return join(this.configDir, ".pim", "presets", "opencode-go.json");
-  }
+  readonly configDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 
   async inspect(): Promise<AgentSummary> {
     let version: string | null = null;
@@ -262,17 +225,6 @@ export class PiAdapter implements AgentAdapter {
       modelsSchema.parse(input),
     );
     return writeJsonAtomic(path, restoreSecrets(parsed, previous.data));
-  }
-
-  async modelPresets(): Promise<ProviderPreset[]> {
-    return mergeCachedPreset(piModelPresets, await readCachedPreset(this.presetCachePath));
-  }
-
-  /** Re-reads the OpenCode Go docs, persists the result, and returns the merged catalog. */
-  async refreshPresets(): Promise<ProviderPreset[]> {
-    const preset = await refreshOpenCodeGoPreset();
-    await persistPresetCache(this.presetCachePath, preset);
-    return mergeCachedPreset(piModelPresets, preset);
   }
 }
 

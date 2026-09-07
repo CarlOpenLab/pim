@@ -1,11 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { ompModelPresets, ompRolePresets } from "../presets/omp.js";
-import { piModelPresets } from "../presets/pi.js";
+import { ompRolePresets } from "../presets/omp.js";
 import {
   assertNoLiteralSecrets,
   collectSecretReferences,
@@ -20,7 +18,6 @@ import type {
   ConfigScope,
   CredentialStatus,
   ModelsConfiguration,
-  ProviderPreset,
   SaveResult,
 } from "./types.js";
 
@@ -250,31 +247,10 @@ export function restoreSecrets(
   return restoreRedactions(next, previous) as ModelsConfiguration;
 }
 
-function clonePreset(value: ProviderPreset): ProviderPreset {
-  return JSON.parse(JSON.stringify(value)) as ProviderPreset;
-}
-
-async function readCachedPreset(path: string): Promise<ProviderPreset | null> {
-  try {
-    return JSON.parse(await readFile(path, "utf8")) as ProviderPreset;
-  } catch {
-    return null;
-  }
-}
-
-async function persistPresetCache(path: string, preset: ProviderPreset): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(preset, null, 2)}\n`, "utf8");
-}
-
 export class OmpAdapter implements AgentAdapter {
   readonly id = "omp" as const;
-  private readonly configDir =
+  readonly configDir =
     process.env.OMP_AGENT_DIR || process.env.OMP_CONFIG_DIR || join(homedir(), ".omp");
-
-  private get presetCacheDir(): string {
-    return join(this.configDir, ".pim", "presets");
-  }
 
   async inspect(): Promise<AgentSummary> {
     let version: string | null = null;
@@ -491,31 +467,6 @@ export class OmpAdapter implements AgentAdapter {
       modelsSchema.parse(input),
     );
     return writeJsonAtomic(path, restoreSecrets(parsed, previous.data as ModelsConfiguration));
-  }
-
-  async modelPresets(): Promise<ProviderPreset[]> {
-    const piCachePath = join(homedir(), ".pi", "agent", ".pim", "presets", "opencode-go.json");
-    const ompCached = await readCachedPreset(join(this.presetCacheDir, "opencode-go.json"));
-    const piCached = ompCached ? null : await readCachedPreset(piCachePath);
-    const cached = ompCached ?? piCached;
-    const opencodeBaseline = piModelPresets.find((p) => p.id === "opencode-go");
-    const baseline: ProviderPreset[] = [...ompModelPresets];
-    if (opencodeBaseline && !baseline.some((p) => p.id === "opencode-go")) {
-      baseline.push(clonePreset(opencodeBaseline));
-    }
-    if (cached) {
-      const idx = baseline.findIndex((p) => p.id === cached.id);
-      if (idx >= 0) baseline[idx] = clonePreset(cached);
-      else baseline.push(clonePreset(cached));
-    }
-    return baseline;
-  }
-
-  async refreshPresets(): Promise<ProviderPreset[]> {
-    const { refreshOpenCodeGoPreset } = await import("../presets/opencode-go.js");
-    const preset = await refreshOpenCodeGoPreset();
-    await persistPresetCache(join(this.presetCacheDir, "opencode-go.json"), preset);
-    return this.modelPresets();
   }
 
   getRolePresets() {

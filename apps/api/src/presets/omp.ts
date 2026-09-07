@@ -3,7 +3,8 @@
  * Presets are starting points — connection fields are durable while model IDs/prices drift.
  * Never carry a literal key, only `$VAR_NAME`.
  */
-import type { ProviderPreset, RolePreset } from "../adapters/types.js";
+import type { RolePreset } from "../adapters/types.js";
+import type { ProviderPreset } from "./types.js";
 
 export const ompModelPresets: ProviderPreset[] = [
   {

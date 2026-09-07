@@ -52,49 +52,15 @@ export interface AgentConfiguration {
   secretRefs: SecretReference[];
 }
 
-export interface ModelsConfiguration {
-  providers: Record<string, ProviderConfiguration>;
-}
+import type { ModelsConfiguration } from "../presets/types.js";
 
-export interface ProviderConfiguration {
-  baseUrl?: string;
-  api?: "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
-  apiKey?: string;
-  oauth?: string;
-  authHeader?: boolean;
-  headers?: Record<string, string>;
-  models?: ModelConfiguration[];
-  modelOverrides?: Record<string, Record<string, unknown>>;
-  compat?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-export interface ModelConfiguration {
-  id: string;
-  name?: string;
-  api?: ProviderConfiguration["api"];
-  reasoning?: boolean;
-  input?: Array<"text" | "image">;
-  contextWindow?: number;
-  maxTokens?: number;
-  cost?: Record<string, unknown>;
-  compat?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-/**
- * A starting point for a provider, not a source of truth. Connection fields are the useful
- * part; models and pricing drift, so the UI tells the user to verify what it imported.
- */
-export interface ProviderPreset {
-  id: string;
-  label: string;
-  description: string;
-  docsUrl?: string;
-  /** Connection defaults. Models are kept separate so they can be imported one at a time. */
-  provider: Omit<ProviderConfiguration, "models">;
-  models: ModelConfiguration[];
-}
+// The preset layer owns the model/provider configuration shapes it ships as templates.
+export type {
+  ModelConfiguration,
+  ModelsConfiguration,
+  ProviderConfiguration,
+  ProviderPreset,
+} from "../presets/types.js";
 
 export interface SaveResult {
   path: string;
@@ -128,13 +94,6 @@ export interface AgentAdapter {
     value: Record<string, unknown>,
   ): Promise<SaveResult>;
   writeModels(value: ModelsConfiguration): Promise<SaveResult>;
-  /** Optional: provider templates whose shape is specific to this agent's models file. */
-  modelPresets?(): Promise<ProviderPreset[]>;
-  /**
-   * Optional: rebuild provider templates from upstream docs (model IDs and prices drift
-   * whenever a vendor ships, so the UI offers a manual refresh instead of hardcoding them).
-   */
-  refreshPresets?(): Promise<ProviderPreset[]>;
   /** Optional: persona templates the UI renders in the persona tab. */
   getRolePresets?(): RolePreset[];
   /** Optional: models the agent runtime itself reports as selectable (e.g. `omp models`). */
