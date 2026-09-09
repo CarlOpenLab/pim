@@ -10,7 +10,12 @@ import {
   isSecretPlaceholder,
   REDACTED,
 } from "../secret-ref.js";
-import { readJsonDocument, writeJsonAtomic } from "./json-file.js";
+import {
+  readFirstExistingDocument,
+  readJsonDocument,
+  writeJsonAtomic,
+  writeYamlAtomic,
+} from "./json-file.js";
 import type {
   AgentAdapter,
   AgentConfiguration,
@@ -250,7 +255,13 @@ export function restoreSecrets(
 export class OmpAdapter implements AgentAdapter {
   readonly id = "omp" as const;
   readonly configDir =
-    process.env.OMP_AGENT_DIR || process.env.OMP_CONFIG_DIR || join(homedir(), ".omp");
+    process.env.OMP_AGENT_DIR ||
+    (process.env.OMP_CONFIG_DIR
+      ? process.env.OMP_CONFIG_DIR.endsWith("agent") ||
+        process.env.OMP_CONFIG_DIR.endsWith("agent/")
+        ? process.env.OMP_CONFIG_DIR
+        : join(process.env.OMP_CONFIG_DIR, "agent")
+      : join(homedir(), ".omp", "agent"));
 
   async inspect(): Promise<AgentSummary> {
     let version: string | null = null;
@@ -290,13 +301,20 @@ export class OmpAdapter implements AgentAdapter {
       scope === "global"
         ? join(this.configDir, "settings.json")
         : join(root, ".omp", "settings.json");
-    const modelsPath = join(this.configDir, "models.json");
+    const candidateModelPaths = [
+      join(this.configDir, "models.yml"),
+      join(this.configDir, "models.yaml"),
+      join(this.configDir, "models.json"),
+      join(homedir(), ".omp", "models.json"),
+    ];
     const authPath = join(this.configDir, "auth.json");
 
     const [agent, settings, models, auth, ompConfigMap] = await Promise.all([
       this.inspect(),
       readJsonDocument(settingsPath, {}, (value) => settingsSchema.parse(value)),
-      readJsonDocument(modelsPath, { providers: {} }, (value) => modelsSchema.parse(value)),
+      readFirstExistingDocument(candidateModelPaths, { providers: {} }, (value) =>
+        modelsSchema.parse(value),
+      ),
       readJsonDocument(authPath, {}, (value) => recordSchema.parse(value)),
       fetchOmpConfigMap(),
     ]);
@@ -462,11 +480,31 @@ export class OmpAdapter implements AgentAdapter {
   async writeModels(value: ModelsConfiguration): Promise<SaveResult> {
     const parsed = modelsSchema.parse(value) as ModelsConfiguration;
     assertNoLiteralSecrets(parsed);
-    const path = join(this.configDir, "models.json");
-    const previous = await readJsonDocument(path, { providers: {} }, (input) =>
-      modelsSchema.parse(input),
+    const candidateModelPaths = [
+      join(this.configDir, "models.yml"),
+      join(this.configDir, "models.yaml"),
+      join(this.configDir, "models.json"),
+      join(homedir(), ".omp", "models.json"),
+    ];
+    const previous = await readFirstExistingDocument(
+      candidateModelPaths,
+      { providers: {} },
+      (input) => modelsSchema.parse(input),
     );
-    return writeJsonAtomic(path, restoreSecrets(parsed, previous.data as ModelsConfiguration));
+    const restored = restoreSecrets(parsed, previous.data as ModelsConfiguration);
+
+    const ymlPath = join(this.configDir, "models.yml");
+    const jsonPath = join(this.configDir, "models.json");
+
+    // OMP exclusively reads models.yml if present. We write models.yml as primary
+    // and sync models.json for compatibility.
+    const result = await writeYamlAtomic(ymlPath, restored);
+    try {
+      await writeJsonAtomic(jsonPath, restored);
+    } catch {
+      // json write is secondary for OMP
+    }
+    return result;
   }
 
   getRolePresets() {

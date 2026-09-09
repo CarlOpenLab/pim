@@ -20,6 +20,7 @@ catalog:
   vite-plus: 0.2.7
   vitest: ^4.1.10
   vue: ^3.5.40
+  yaml: ^2.9.0
   zod: ^4.4.3
 overrides:
   vite: "catalog:"

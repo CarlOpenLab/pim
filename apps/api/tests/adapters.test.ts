@@ -219,4 +219,53 @@ describe("OmpAdapter", () => {
     // The migrated key must be gone from the file; regular keys stay.
     expect(saved).toEqual({ theme: "dark" });
   });
+
+  test("writeModels writes both models.yml and models.json, and restores redacted secrets", async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(
+      join(directory, "models.yml"),
+      "providers:\n  deepseek:\n    baseUrl: https://api.deepseek.com\n    apiKey: literal-key\n",
+    );
+    process.env.OMP_AGENT_DIR = directory;
+    const adapter = new OmpAdapter();
+
+    await adapter.writeModels({
+      providers: {
+        deepseek: { baseUrl: "https://api.deepseek.com", apiKey: REDACTED },
+      },
+    });
+
+    const savedYml = await readFile(join(directory, "models.yml"), "utf8");
+    expect(savedYml).toContain("baseUrl: https://api.deepseek.com");
+    expect(savedYml).toContain("apiKey: literal-key");
+
+    const savedJson = JSON.parse(await readFile(join(directory, "models.json"), "utf8"));
+    expect(savedJson.providers.deepseek.apiKey).toBe("literal-key");
+  });
+
+  test("readConfiguration prefers models.yml when present, falls back to models.json", async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(
+      join(directory, "models.json"),
+      JSON.stringify({
+        providers: {
+          jsonProvider: { baseUrl: "https://json.example.com", apiKey: "$JSON_KEY" },
+        },
+      }),
+    );
+    process.env.OMP_AGENT_DIR = directory;
+    const adapter = new OmpAdapter();
+
+    const configJson = await adapter.readConfiguration("global", projectPathFixture);
+    expect(configJson.models.data.providers.jsonProvider).toBeDefined();
+
+    // Now write models.yml - it should take precedence
+    await writeFile(
+      join(directory, "models.yml"),
+      "providers:\n  ymlProvider:\n    baseUrl: https://yml.example.com\n    apiKey: $YML_KEY\n",
+    );
+    const configYml = await adapter.readConfiguration("global", projectPathFixture);
+    expect(configYml.models.data.providers.ymlProvider).toBeDefined();
+    expect(configYml.models.data.providers.jsonProvider).toBeUndefined();
+  });
 });

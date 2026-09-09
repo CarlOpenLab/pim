@@ -13,6 +13,7 @@
     "@hono/node-server": "catalog:",
     "hono": "catalog:",
     "jsonc-parser": "catalog:",
+    "yaml": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
