@@ -496,7 +496,13 @@ export function restoreSecrets(
 export class OmpAdapter implements AgentAdapter {
   readonly id = "omp" as const;
   readonly configDir =
-    process.env.OMP_AGENT_DIR || process.env.OMP_CONFIG_DIR || join(homedir(), ".omp");
+    process.env.OMP_AGENT_DIR ||
+    (process.env.OMP_CONFIG_DIR
+      ? process.env.OMP_CONFIG_DIR.endsWith("agent") ||
+        process.env.OMP_CONFIG_DIR.endsWith("agent/")
+        ? process.env.OMP_CONFIG_DIR
+        : join(process.env.OMP_CONFIG_DIR, "agent")
+      : join(homedir(), ".omp", "agent"));
 
   async inspect(): Promise<AgentSummary> {
     let version: string | null = null;
@@ -791,7 +797,6 @@ export class OmpAdapter implements AgentAdapter {
       const agentYmlPath = join(agentDir, "models.yml");
       writeFileSync(agentYmlPath, ymlContent, "utf8");
     }
-
     return result;
   }
 

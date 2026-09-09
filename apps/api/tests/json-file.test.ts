@@ -2,7 +2,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 /// <reference types="vitest/globals" />
-import { readJsonDocument, writeJsonAtomic } from "../src/adapters/json-file.ts";
+import {
+  readFirstExistingDocument,
+  readJsonDocument,
+  readYamlDocument,
+  writeJsonAtomic,
+  writeYamlAtomic,
+} from "../src/adapters/json-file.ts";
 import { restoreSecrets, sanitizeModels } from "../src/adapters/pi.ts";
 import type { ModelsConfiguration } from "../src/adapters/types.ts";
 
@@ -81,4 +87,39 @@ test("atomically writes and backs up an existing file", async () => {
   expect(result.backupPath).toBeTruthy();
   expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "light" });
   expect(JSON.parse(await readFile(result.backupPath!, "utf8"))).toEqual({ theme: "dark" });
+});
+
+test("atomically writes, backs up, and reads YAML documents", async () => {
+  const directory = await temporaryDirectory();
+  const path = join(directory, "models.yml");
+  await writeYamlAtomic(path, { providers: { first: { baseUrl: "https://first.com" } } });
+
+  const document1 = await readYamlDocument(path, { providers: {} });
+  expect(document1.data).toEqual({ providers: { first: { baseUrl: "https://first.com" } } });
+
+  const result = await writeYamlAtomic(path, {
+    providers: { second: { baseUrl: "https://second.com" } },
+  });
+  expect(result.backupPath).toBeTruthy();
+
+  const document2 = await readYamlDocument(path, { providers: {} });
+  expect(document2.data).toEqual({ providers: { second: { baseUrl: "https://second.com" } } });
+});
+
+test("readFirstExistingDocument selects first available document across YAML and JSON", async () => {
+  const directory = await temporaryDirectory();
+  const ymlPath = join(directory, "models.yml");
+  const jsonPath = join(directory, "models.json");
+
+  // When only json exists
+  await writeJsonAtomic(jsonPath, { source: "json" });
+  const doc1 = await readFirstExistingDocument([ymlPath, jsonPath], { source: "none" });
+  expect(doc1.path).toBe(jsonPath);
+  expect((doc1.data as any).source).toBe("json");
+
+  // When yml is added, it takes precedence
+  await writeYamlAtomic(ymlPath, { source: "yml" });
+  const doc2 = await readFirstExistingDocument([ymlPath, jsonPath], { source: "none" });
+  expect(doc2.path).toBe(ymlPath);
+  expect((doc2.data as any).source).toBe("yml");
 });
