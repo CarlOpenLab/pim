@@ -42,13 +42,18 @@ const sectionCatalog = [
   { key: "persona", label: "人格 · 预设", icon: Crown, caps: ["persona", "roles"] },
   // 通用
   { key: "settings", label: "基础设置", icon: Settings, caps: ["settings"] },
-  { key: "providers", label: "模型服务", icon: SlidersHorizontal, caps: ["providers", "models"] },
+  {
+    key: "providers",
+    label: "模型服务 · API Key",
+    icon: SlidersHorizontal,
+    caps: ["providers", "models"],
+  },
 ] as const;
 
 const agents = ref<AgentSummary[]>([]);
 const presets = ref<ProviderPreset[]>([]);
 const rolePresets = ref<OmpRolePreset[]>([]);
-const agentId = ref("pi");
+const agentId = ref(localStorage.getItem("pim_active_agent") || "omp");
 const config = ref<AgentConfiguration | null>(null);
 const scope = ref<ConfigScope>("global");
 const projectPath = ref("");
@@ -101,7 +106,16 @@ async function load(nextAgent = agentId.value, nextScope = scope.value) {
   loadError.value = "";
   try {
     if (!projectPath.value) projectPath.value = await getDefaultProjectPath();
-    if (agents.value.length === 0) agents.value = await listAgents();
+    if (agents.value.length === 0) {
+      agents.value = await listAgents();
+      const saved = localStorage.getItem("pim_active_agent");
+      if (saved && agents.value.some((a) => a.id === saved)) {
+        nextAgent = saved;
+      } else if (!agents.value.some((a) => a.id === nextAgent && a.available)) {
+        const firstAvail = agents.value.find((a) => a.available);
+        if (firstAvail) nextAgent = firstAvail.id;
+      }
+    }
     // Presets are a convenience — an adapter that ships none must not break the load.
     const [nextConfig, nextPresets, nextRolePresets, nextAvailableModels] = await Promise.all([
       loadConfiguration(nextAgent, nextScope, projectPath.value),
@@ -118,6 +132,7 @@ async function load(nextAgent = agentId.value, nextScope = scope.value) {
     rolePresets.value = nextRolePresets;
     availableModels.value = nextAvailableModels;
     agentId.value = nextAgent;
+    localStorage.setItem("pim_active_agent", nextAgent);
     scope.value = nextScope;
     settingsBaseline.value = JSON.stringify(config.value.settings.data);
     modelsBaseline.value = JSON.stringify(config.value.models.data);
@@ -132,6 +147,7 @@ async function load(nextAgent = agentId.value, nextScope = scope.value) {
 
 /** Reloading drops in-memory edits, so confirm first whenever something is unsaved. */
 function reload(nextAgent = agentId.value, nextScope = scope.value) {
+  localStorage.setItem("pim_active_agent", nextAgent);
   if (!isDirty.value) return load(nextAgent, nextScope);
 
   Modal.confirm({
@@ -153,6 +169,20 @@ async function refreshPresets() {
     message.error(error instanceof Error ? error.message : "刷新预设失败");
   } finally {
     presetsRefreshing.value = false;
+  }
+}
+
+async function refreshCredentials() {
+  if (!config.value) return;
+  try {
+    const nextConfig = await loadConfiguration(agentId.value, scope.value, projectPath.value);
+    config.value.credentials = nextConfig.credentials;
+    if (JSON.stringify(config.value.models.data) === modelsBaseline.value) {
+      config.value.models.data = nextConfig.models.data;
+      modelsBaseline.value = JSON.stringify(nextConfig.models.data);
+    }
+  } catch {
+    // best-effort
   }
 }
 
@@ -413,11 +443,14 @@ onMounted(() => load());
               </div>
               <ProvidersPanel
                 v-else-if="activeView === 'providers'"
+                :agent-id="agentId"
+                :credentials="config?.credentials ?? []"
                 :models="models"
                 :presets="presets"
                 :issues="modelIssues"
                 :presets-refreshing="presetsRefreshing"
                 @refresh-presets="refreshPresets"
+                @credential-updated="refreshCredentials"
                 @change="applyModelsDraft"
               />
             </template>

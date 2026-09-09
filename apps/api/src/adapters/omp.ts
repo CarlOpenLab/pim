@@ -346,18 +346,50 @@ export function deleteOmpCredentials(dbPath: string, providerId: string): boolea
         .get() as { present?: number } | undefined;
       if (!tableCheck?.present) return false;
 
-      const now = Math.floor(Date.now() / 1000);
-      const result = db
-        .prepare(
-          "UPDATE auth_credentials SET disabled_cause = 'logged out by user', updated_at = ? WHERE provider = ? AND disabled_cause IS NULL",
-        )
-        .run(now, providerId);
-      return (result.changes ?? 0) > 0;
+      db.prepare("DELETE FROM auth_credentials WHERE provider = ?").run(providerId);
+      return true;
     } finally {
       db.close();
     }
   } catch {
     return false;
+  }
+}
+
+export function updateOmpDotEnv(dir: string, varName: string, value: string): void {
+  const envPath = join(dir, ".env");
+  let content = "";
+  if (existsSync(envPath)) {
+    try {
+      content = readFileSync(envPath, "utf8");
+    } catch {
+      content = "";
+    }
+  }
+  const linePattern = new RegExp(`^\\s*${varName}\\s*=.*$`, "m");
+  const newLine = `${varName}="${value}"`;
+  if (linePattern.test(content)) {
+    content = content.replace(linePattern, newLine);
+  } else {
+    content = content.trimEnd() ? `${content.trimEnd()}\n${newLine}\n` : `${newLine}\n`;
+  }
+  try {
+    writeFileSync(envPath, content, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // best effort
+  }
+}
+
+export function removeOmpDotEnvVar(dir: string, varName: string): void {
+  const envPath = join(dir, ".env");
+  if (!existsSync(envPath)) return;
+  try {
+    const content = readFileSync(envPath, "utf8");
+    const linePattern = new RegExp(`^\\s*${varName}\\s*=.*$\\n?`, "m");
+    const updated = content.replace(linePattern, "");
+    writeFileSync(envPath, updated, "utf8");
+  } catch {
+    // best effort
   }
 }
 
@@ -383,7 +415,8 @@ async function checkProviderCredential(
   }
   try {
     const { stdout } = await execFileAsync("omp", ["token", providerId], { timeout: 3000 });
-    const hasCredential = stdout.trim().length > 0;
+    const token = stdout.trim();
+    const hasCredential = token.length > 0 && !token.startsWith("$");
     return {
       provider: providerId,
       type: "api",
@@ -402,29 +435,73 @@ async function checkProviderCredential(
 
 /**
  * Triggers the logout flow for a provider via agent.db,
- * with best-effort fallback to `omp auth-broker logout <provider>`.
+ * models.yml, .env, and models.json, with best-effort fallback to `omp auth-broker logout`.
  */
 export async function triggerAuthLogout(
   providerId: string,
   dbPath?: string,
+  agentDir?: string,
+  configDir?: string,
 ): Promise<{ success: boolean; message: string }> {
-  let dbRemoved = false;
   if (dbPath) {
-    dbRemoved = deleteOmpCredentials(dbPath, providerId);
+    deleteOmpCredentials(dbPath, providerId);
   }
-  try {
-    const { stdout, stderr } = await execFileAsync("omp", ["auth-broker", "logout", providerId], {
-      timeout: 5000,
-    });
-    const output = stdout.trim() || stderr.trim();
-    return { success: true, message: output || "已退出登录" };
-  } catch (error) {
-    if (dbRemoved) {
-      return { success: true, message: `已移除 ${providerId} 的凭据` };
+
+  const targetAgentDir = agentDir ?? (configDir ? getOmpAgentDir(configDir) : undefined);
+  if (targetAgentDir) {
+    try {
+      const ymlPath = join(targetAgentDir, "models.yml");
+      if (existsSync(ymlPath)) {
+        const content = readFileSync(ymlPath, "utf8");
+        const parsed = parseYaml(content) as ModelsConfiguration | null;
+        if (parsed?.providers && parsed.providers[providerId]) {
+          const prov = parsed.providers[providerId];
+          delete prov.apiKey;
+          delete prov.auth;
+          delete prov.authHeader;
+          writeFileSync(ymlPath, stringifyYaml(parsed), "utf8");
+        }
+      }
+    } catch {
+      // best effort
     }
-    const message = error instanceof Error ? error.message : String(error);
-    return { success: false, message: `退出登录失败：${message}` };
+
+    try {
+      removeOmpDotEnvVar(targetAgentDir, "CMD_API_KEY");
+      removeOmpDotEnvVar(
+        targetAgentDir,
+        `${providerId.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`,
+      );
+    } catch {
+      // best effort
+    }
   }
+
+  const dirsToClean = Array.from(new Set([configDir, targetAgentDir].filter(Boolean) as string[]));
+  for (const dir of dirsToClean) {
+    const jsonPath = join(dir, "models.json");
+    if (existsSync(jsonPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(jsonPath, "utf8"));
+        if (raw?.providers?.[providerId]?.apiKey) {
+          delete raw.providers[providerId].apiKey;
+          writeFileSync(jsonPath, JSON.stringify(raw, null, 2), "utf8");
+        }
+      } catch {
+        // best effort
+      }
+    }
+  }
+
+  try {
+    await execFileAsync("omp", ["auth-broker", "logout", providerId], {
+      timeout: 3000,
+    });
+  } catch {
+    // best-effort fallback
+  }
+
+  return { success: true, message: `已清除 ${providerId} 的凭据与 API Key` };
 }
 
 async function writeOmpModelRoles(roles: Record<string, string>): Promise<void> {
@@ -493,6 +570,62 @@ export function restoreSecrets(
   return restoreRedactions(next, previous) as ModelsConfiguration;
 }
 
+export function syncActiveOmpCredentialsToRuntime(configDir: string): void {
+  const agentDir = getOmpAgentDir(configDir);
+  const dbPath = getOmpAgentDbPath(configDir);
+  const activeCreds = listActiveOmpCredentials(dbPath);
+  if (activeCreds.size === 0) return;
+
+  const ymlPath = join(agentDir, "models.yml");
+  if (!existsSync(ymlPath)) return;
+
+  try {
+    const content = readFileSync(ymlPath, "utf8");
+    const parsed = parseYaml(content) as ModelsConfiguration | null;
+    if (!parsed?.providers) return;
+
+    let modified = false;
+    for (const [providerId, prov] of Object.entries(parsed.providers)) {
+      const cred = activeCreds.get(providerId);
+      if (!cred || cred.type === "oauth" || !cred.key) continue;
+
+      let envVarName: string | null = null;
+      if (prov.apiKey?.startsWith("$")) {
+        envVarName = prov.apiKey.slice(1);
+      }
+      if (!envVarName) {
+        const modelsJsonPath = join(configDir, "models.json");
+        if (existsSync(modelsJsonPath)) {
+          try {
+            const raw = JSON.parse(readFileSync(modelsJsonPath, "utf8"));
+            const k = raw?.providers?.[providerId]?.apiKey;
+            if (typeof k === "string" && k.startsWith("$")) envVarName = k.slice(1);
+          } catch {
+            // ignore
+          }
+        }
+      }
+      if (!envVarName) {
+        envVarName = `${providerId.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`;
+      }
+
+      if (prov.apiKey !== cred.key || !prov.authHeader || prov.auth) {
+        prov.apiKey = cred.key;
+        prov.authHeader = true;
+        delete prov.auth;
+        modified = true;
+      }
+      updateOmpDotEnv(agentDir, envVarName, cred.key);
+    }
+
+    if (modified) {
+      writeFileSync(ymlPath, stringifyYaml(parsed), "utf8");
+    }
+  } catch {
+    // best effort
+  }
+}
+
 export class OmpAdapter implements AgentAdapter {
   readonly id = "omp" as const;
   readonly configDir =
@@ -535,6 +668,7 @@ export class OmpAdapter implements AgentAdapter {
   }
 
   async readConfiguration(scope: ConfigScope, projectPath: string): Promise<AgentConfiguration> {
+    syncActiveOmpCredentialsToRuntime(this.configDir);
     const root = projectRoot(projectPath);
     const settingsPath =
       scope === "global"
@@ -788,9 +922,32 @@ export class OmpAdapter implements AgentAdapter {
       const activeCreds = listActiveOmpCredentials(this.getAgentDbPath());
       const ymlData = JSON.parse(JSON.stringify(restored)) as ModelsConfiguration;
       for (const [providerId, prov] of Object.entries(ymlData.providers)) {
-        if (activeCreds.has(providerId) && (prov.apiKey?.startsWith("$") || !prov.apiKey)) {
-          prov.auth = "oauth";
-          delete prov.apiKey;
+        const cred = activeCreds.get(providerId);
+        if (cred) {
+          if (cred.type === "oauth") {
+            prov.auth = "oauth";
+            delete prov.apiKey;
+          } else if (cred.key) {
+            let envVarName: string | null = null;
+            if (prov.apiKey?.startsWith("$")) {
+              envVarName = prov.apiKey.slice(1);
+            } else {
+              const origKey = (restored.providers as Record<string, { apiKey?: string }>)?.[
+                providerId
+              ]?.apiKey;
+              if (typeof origKey === "string" && origKey.startsWith("$")) {
+                envVarName = origKey.slice(1);
+              } else {
+                envVarName = `${providerId.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`;
+              }
+            }
+            prov.apiKey = cred.key;
+            prov.authHeader = true;
+            delete prov.auth;
+            if (envVarName) {
+              updateOmpDotEnv(agentDir, envVarName, cred.key);
+            }
+          }
         }
       }
       const ymlContent = stringifyYaml(ymlData);
@@ -825,7 +982,12 @@ export class OmpAdapter implements AgentAdapter {
    * Removes a provider's credentials from agent.db.
    */
   async logoutProvider(providerId: string): Promise<{ success: boolean; message: string }> {
-    return triggerAuthLogout(providerId, this.getAgentDbPath());
+    return triggerAuthLogout(
+      providerId,
+      this.getAgentDbPath(),
+      getOmpAgentDir(this.configDir),
+      this.configDir,
+    );
   }
 
   /**
@@ -848,15 +1010,50 @@ export class OmpAdapter implements AgentAdapter {
       try {
         const agentDir = getOmpAgentDir(this.configDir);
         const ymlPath = join(agentDir, "models.yml");
+        let envVarName: string | null = null;
         if (existsSync(ymlPath)) {
           const content = readFileSync(ymlPath, "utf8");
           const parsed = parseYaml(content) as ModelsConfiguration | null;
           if (parsed?.providers && parsed.providers[providerId]) {
             const prov = parsed.providers[providerId];
-            if (prov.apiKey?.startsWith("$") || !prov.apiKey) {
-              prov.auth = "oauth";
-              delete prov.apiKey;
-              writeFileSync(ymlPath, stringifyYaml(parsed), "utf8");
+            if (prov.apiKey?.startsWith("$")) {
+              envVarName = prov.apiKey.slice(1);
+            }
+            prov.apiKey = apiKey;
+            prov.authHeader = true;
+            delete prov.auth;
+            writeFileSync(ymlPath, stringifyYaml(parsed), "utf8");
+          }
+        }
+        if (!envVarName) {
+          const modelsJsonPath = join(this.configDir, "models.json");
+          if (existsSync(modelsJsonPath)) {
+            try {
+              const raw = JSON.parse(readFileSync(modelsJsonPath, "utf8"));
+              const k = raw?.providers?.[providerId]?.apiKey;
+              if (typeof k === "string" && k.startsWith("$")) envVarName = k.slice(1);
+            } catch {
+              // ignore
+            }
+          }
+        }
+        if (!envVarName) {
+          envVarName = `${providerId.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`;
+        }
+        updateOmpDotEnv(agentDir, envVarName, apiKey);
+
+        const dirs = Array.from(new Set([this.configDir, agentDir]));
+        for (const dir of dirs) {
+          const jsonPath = join(dir, "models.json");
+          if (existsSync(jsonPath)) {
+            try {
+              const raw = JSON.parse(readFileSync(jsonPath, "utf8"));
+              if (raw?.providers?.[providerId]) {
+                raw.providers[providerId].apiKey = `$${envVarName}`;
+                writeFileSync(jsonPath, JSON.stringify(raw, null, 2), "utf8");
+              }
+            } catch {
+              // best effort
             }
           }
         }

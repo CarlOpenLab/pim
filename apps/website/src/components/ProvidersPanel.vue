@@ -3,27 +3,33 @@ import { ExternalLink, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "@lucide
 import { message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import type { ModelIssue } from "../model-validation.ts";
+import { logoutProvider, setApiKey } from "../api.ts";
 import ModelEditor from "./ModelEditor.vue";
 import {
+  type CredentialStatus,
   type ModelConfiguration,
   type ModelsConfiguration,
   type ProviderPreset,
 } from "../types.ts";
 
 const props = defineProps<{
+  agentId: string;
+  credentials?: CredentialStatus[];
   models: ModelsConfiguration;
   presets: ProviderPreset[];
   issues: ModelIssue[];
   presetsRefreshing?: boolean;
 }>();
-const emit = defineEmits<{ "refresh-presets": []; change: [value: ModelsConfiguration] }>();
+const emit = defineEmits<{
+  "refresh-presets": [];
+  change: [value: ModelsConfiguration];
+  "credential-updated": [];
+}>();
 
-/** Plain JSON round trip: detaches copies from reactive proxies and props. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Working copy: every edit lands here and is emitted upward; props stay untouched. */
 const working = ref(clone(props.models));
 watch(
   () => props.models,
@@ -39,6 +45,10 @@ const addOpen = ref(false);
 const addMode = ref<"preset" | "manual">("preset");
 const draftId = ref("");
 const draftPresetId = ref("");
+const draftApiKey = ref("");
+const inlineApiKey = ref("");
+const inlineKeySaving = ref(false);
+const logoutLoading = ref(false);
 const importOpen = ref(false);
 const importPresetId = ref("");
 const importSelection = ref<string[]>([]);
@@ -54,6 +64,9 @@ const modelColumns = [
 
 const providerIds = computed(() => Object.keys(working.value.providers).sort());
 const provider = computed(() => working.value.providers[selectedId.value]);
+const currentCredential = computed(() =>
+  (props.credentials ?? []).find((c) => c.provider === selectedId.value),
+);
 const providerSegmentOptions = computed(() =>
   providerIds.value.map((id) => ({ label: id, value: id })),
 );
@@ -80,6 +93,11 @@ const editingIssues = computed(() => {
     .map((issue) => issue.message);
 });
 
+/** 是否已设置凭据：凭据库里有 Key，或配置里有 $ENV_VAR 引用 */
+const hasCredential = computed(
+  () => currentCredential.value?.configured || !!provider.value?.apiKey,
+);
+
 watch(
   providerIds,
   (ids) => {
@@ -88,12 +106,101 @@ watch(
   { immediate: true },
 );
 
+watch(selectedId, () => {
+  inlineApiKey.value = "";
+});
+
 watch(addOpen, (open) => {
   if (!open) return;
   addMode.value = props.presets.length > 0 ? "preset" : "manual";
   draftPresetId.value = props.presets[0]?.id ?? "";
   draftId.value = "";
+  draftApiKey.value = "";
 });
+
+/** command-code-goat → $COMMAND_CODE_GOAT_API_KEY */
+function envVarRef(providerId: string): string {
+  return `$${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+}
+
+/**
+ * 设置 API Key：
+ * - 真实 Key（不以 $ 开头）→ 存入本地凭据库，配置文件写 $ENV_VAR 引用（Key 不进配置文件）
+ * - 环境变量引用（以 $ 开头）→ 直接写配置文件，清凭据库旧 Key
+ */
+async function applyInlineApiKey() {
+  const key = inlineApiKey.value.trim();
+  if (!key || !provider.value) return;
+  inlineKeySaving.value = true;
+  try {
+    if (key.startsWith("$")) {
+      provider.value.apiKey = key;
+      await logoutProvider(props.agentId, selectedId.value).catch(() => {});
+      if (currentCredential.value) currentCredential.value.configured = false;
+      emit("credential-updated");
+      message.success(`已设置环境变量引用 ${key}`);
+    } else {
+      const res = await setApiKey(props.agentId, selectedId.value, key);
+      if (res.success) {
+        if (!provider.value.apiKey?.startsWith("$")) {
+          provider.value.apiKey = envVarRef(selectedId.value);
+        }
+        if (currentCredential.value) currentCredential.value.configured = true;
+        emit("credential-updated");
+        message.success("已保存 API Key（存入本地凭据库，配置文件仅留环境变量引用，不含明文）");
+      } else {
+        message.error(res.message || "保存 API Key 失败");
+      }
+    }
+    inlineApiKey.value = "";
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "保存 API Key 失败");
+  } finally {
+    inlineKeySaving.value = false;
+  }
+}
+
+/** 清除凭据库里的 Key，同时移除配置文件里的 apiKey 字段 */
+async function clearApiKey() {
+  if (!provider.value) return;
+  logoutLoading.value = true;
+  try {
+    await logoutProvider(props.agentId, selectedId.value).catch(() => {});
+    delete provider.value.apiKey;
+    inlineApiKey.value = "";
+    if (currentCredential.value) currentCredential.value.configured = false;
+    emit("credential-updated");
+    message.success(`已清除 ${selectedId.value} 的凭据`);
+  } catch (error) {
+    message.warning(error instanceof Error ? error.message : "清除凭据失败");
+  } finally {
+    logoutLoading.value = false;
+  }
+}
+
+/**
+ * 添加 Provider 时若填了 API Key，存入凭据库；配置写 $ENV_VAR 引用，不写明文。
+ */
+async function saveDraftApiKeyIfPresent(providerId: string) {
+  const key = draftApiKey.value.trim();
+  if (!key) return;
+  try {
+    if (key.startsWith("$")) {
+      working.value.providers[providerId].apiKey = key;
+    } else {
+      const res = await setApiKey(props.agentId, providerId, key);
+      if (res.success) {
+        working.value.providers[providerId].apiKey = envVarRef(providerId);
+        emit("credential-updated");
+        message.success(`已为 ${providerId} 保存 API Key 到本地凭据库`);
+      } else {
+        message.warning(`API Key 保存失败：${res.message}`);
+      }
+    }
+  } catch (error) {
+    message.warning(`API Key 保存失败：${error instanceof Error ? error.message : "请求失败"}`);
+  }
+}
 
 watch(importOpen, (open) => {
   if (!open) return;
@@ -115,28 +222,32 @@ function createProvider(id: string, value: ModelsConfiguration["providers"][stri
     message.error("该 Provider 已存在");
     return false;
   }
-
   working.value.providers[id] = value;
   selectedId.value = id;
   addOpen.value = false;
   return true;
 }
 
-function addProvider() {
-  createProvider(draftId.value.trim(), { api: "openai-completions", models: [] });
+async function addProvider() {
+  const id = draftId.value.trim();
+  const created = createProvider(id, { api: "openai-completions", models: [] });
+  if (created && draftApiKey.value.trim()) {
+    await saveDraftApiKeyIfPresent(id);
+  }
 }
 
-function addProviderFromPreset() {
+async function addProviderFromPreset() {
   const preset = props.presets.find((item) => item.id === draftPresetId.value);
   if (!preset) return;
 
   const id = draftId.value.trim() || preset.id;
-  // 已存在则直接切换过去，而不是假死
+
   if (working.value.providers[id]) {
     selectedId.value = id;
+    if (draftApiKey.value.trim()) await saveDraftApiKeyIfPresent(id);
     addOpen.value = false;
     message.info(
-      `“${id}” 已存在，已为你切换到该 Provider。如需同步最新模型，请用「从预设添加模型」或「刷新预设」`,
+      `"${id}" 已存在，已为你切换到该 Provider。如需同步最新模型，请用「从预设添加模型」或「刷新预设」`,
     );
     return;
   }
@@ -145,13 +256,16 @@ function addProviderFromPreset() {
     ...clone(preset.provider),
     models: clone(preset.models),
   });
-  if (created)
+  if (created) {
+    if (draftApiKey.value.trim()) await saveDraftApiKeyIfPresent(id);
     message.success(
       preset.models.length
         ? `已导入 ${preset.label}，含 ${preset.models.length} 个模型，请核对参数与价格`
         : `已导入 ${preset.label} 的连接信息，请自行添加模型`,
     );
+  }
 }
+
 function removeProvider() {
   delete working.value.providers[selectedId.value];
 }
@@ -165,7 +279,6 @@ function addModel() {
 
 function importModels() {
   if (!provider.value || !importPreset.value) return;
-
   const chosen = importPreset.value.models.filter((model) =>
     importSelection.value.includes(model.id),
   );
@@ -173,7 +286,6 @@ function importModels() {
     message.warning("先选择要添加的模型");
     return;
   }
-
   (provider.value.models ??= []).push(...clone(chosen));
   importOpen.value = false;
   message.success(`已添加 ${chosen.length} 个模型，请核对参数与价格`);
@@ -230,10 +342,8 @@ function modelRowKey(model: ModelConfiguration) {
             ok-text="删除"
             cancel-text="取消"
             @confirm="removeProvider"
-            ><a-button type="text" danger size="small"
-              ><Trash2 :size="15" />删除</a-button
-            ></a-popconfirm
-          ></template
+            ><a-button type="text" danger size="small"><Trash2 :size="15" />删除</a-button>
+          </a-popconfirm></template
         >
         <a-form layout="vertical">
           <a-row :gutter="20">
@@ -259,6 +369,59 @@ function modelRowKey(model: ModelConfiguration) {
                 ></a-form-item
               ></a-col
             >
+          </a-row>
+          <a-row :gutter="20">
+            <a-col :xs="24">
+              <a-form-item label="API Key">
+                <div class="provider-key-row">
+                  <div class="key-status-indicator">
+                    <a-tag v-if="currentCredential?.configured" color="success">
+                      已配置凭据（Key 存于本地凭据库）
+                    </a-tag>
+                    <a-tag v-else-if="provider.apiKey?.startsWith('$')" color="blue">
+                      环境变量引用 {{ provider.apiKey }}
+                    </a-tag>
+                    <a-tag v-else color="default">未配置凭据</a-tag>
+                  </div>
+                  <div class="key-actions">
+                    <a-input-password
+                      v-model:value="inlineApiKey"
+                      :placeholder="
+                        hasCredential
+                          ? '输入新 Key 可覆盖（sk-... 存凭据库，$VAR 写引用）'
+                          : 'sk-... 或 $ENV_VAR_NAME'
+                      "
+                      style="width: 310px"
+                      autocomplete="off"
+                      @press-enter="applyInlineApiKey"
+                    />
+                    <a-button
+                      type="primary"
+                      ghost
+                      :loading="inlineKeySaving"
+                      :disabled="!inlineApiKey.trim()"
+                      @click="applyInlineApiKey"
+                    >
+                      设置 Key
+                    </a-button>
+                    <a-popconfirm
+                      title="确定清除该 Provider 的凭据？"
+                      ok-text="清除"
+                      cancel-text="取消"
+                      :disabled="!hasCredential"
+                      @confirm="clearApiKey"
+                    >
+                      <a-button danger :loading="logoutLoading" :disabled="!hasCredential"
+                        >清除凭据</a-button
+                      >
+                    </a-popconfirm>
+                  </div>
+                  <div class="provider-key-hint">
+                    输入真实 Key（sk-...）→ 自动存入本地凭据库，配置文件只留环境变量引用，不含明文。
+                  </div>
+                </div>
+              </a-form-item>
+            </a-col>
           </a-row>
         </a-form>
       </a-card>
@@ -361,6 +524,7 @@ function modelRowKey(model: ModelConfiguration) {
       >
     </a-card>
 
+    <!-- 添加 Provider 弹窗 -->
     <a-modal
       v-model:open="addOpen"
       title="添加 Provider"
@@ -409,6 +573,16 @@ function modelRowKey(model: ModelConfiguration) {
           >
             <a-input v-model:value="draftId" :placeholder="draftPresetId" />
           </a-form-item>
+          <a-form-item
+            label="API Key（可选）"
+            extra="真实 Key 自动存入本地凭据库，配置文件只写环境变量引用；留空可稍后设置"
+          >
+            <a-input-password
+              v-model:value="draftApiKey"
+              placeholder="sk-... 或 $ENV_VAR_NAME"
+              autocomplete="off"
+            />
+          </a-form-item>
         </a-form>
         <a-alert type="info" show-icon>
           <template #message>预设只是起点</template>
@@ -419,12 +593,24 @@ function modelRowKey(model: ModelConfiguration) {
         </a-alert>
       </template>
 
-      <a-form v-else layout="vertical"
-        ><a-form-item label="Provider ID" extra="例如 ollama 或 company-proxy"
-          ><a-input v-model:value="draftId" autofocus @press-enter="addProvider" /></a-form-item
-      ></a-form>
+      <a-form v-else layout="vertical">
+        <a-form-item label="Provider ID" extra="例如 ollama 或 company-proxy">
+          <a-input v-model:value="draftId" autofocus @press-enter="addProvider" />
+        </a-form-item>
+        <a-form-item
+          label="API Key（可选）"
+          extra="真实 Key 自动存入本地凭据库，配置文件只写环境变量引用；留空可稍后设置"
+        >
+          <a-input-password
+            v-model:value="draftApiKey"
+            placeholder="sk-... 或 $ENV_VAR_NAME"
+            autocomplete="off"
+          />
+        </a-form-item>
+      </a-form>
     </a-modal>
 
+    <!-- 从预设添加模型弹窗 -->
     <a-modal
       v-model:open="importOpen"
       title="从预设添加模型"

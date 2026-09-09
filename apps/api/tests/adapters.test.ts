@@ -417,10 +417,22 @@ describe("OmpAdapter", () => {
     const agentJson = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8"));
     expect(agentJson.providers.custom.apiKey).toBe("$CUSTOM_API_KEY");
 
-    // Verify models.yml in agent/ has auth: oauth and apiKey removed for the active credential
+    // Verify models.yml in agent/ has the actual apiKey and authHeader set for the active credential
     const agentYmlContent = await readFile(join(agentDir, "models.yml"), "utf8");
     const agentYml = parse(agentYmlContent);
-    expect(agentYml.providers.custom.auth).toBe("oauth");
-    expect(agentYml.providers.custom.apiKey).toBeUndefined();
+    expect(agentYml.providers.custom.apiKey).toBe("sk-custom-secret");
+    expect(agentYml.providers.custom.authHeader).toBe(true);
+    expect(agentYml.providers.custom.auth).toBeUndefined();
+
+    // Now test logoutProvider clears agent.db, models.yml, and .env
+    const logoutRes = await adapter.logoutProvider("custom");
+    expect(logoutRes.success).toBe(true);
+
+    const credCheck = await adapter.checkCredential("custom");
+    expect(credCheck.configured).toBe(false);
+
+    const afterYml = parse(await readFile(join(agentDir, "models.yml"), "utf8"));
+    expect(afterYml.providers.custom.apiKey).toBeUndefined();
+    expect(afterYml.providers.custom.authHeader).toBeUndefined();
   });
 });
