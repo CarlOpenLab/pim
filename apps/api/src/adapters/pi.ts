@@ -158,7 +158,7 @@ export class PiAdapter implements AgentAdapter {
       available: version !== null,
       version,
       configDir: this.configDir,
-      capabilities: ["settings", "providers", "models", "credentials", "resources", "keybindings"],
+      capabilities: ["settings", "providers", "models", "keybindings"],
     };
   }
 
@@ -178,17 +178,29 @@ export class PiAdapter implements AgentAdapter {
       readJsonDocument(authPath, {}, (value) => recordSchema.parse(value)),
     ]);
 
-    const credentials: CredentialStatus[] = Object.entries(auth.data).map(([provider, value]) => {
-      const credential = recordSchema.safeParse(value);
-      const data = credential.success ? credential.data : {};
+    const modelProviderIds = Object.keys(models.data.providers ?? {});
+    const authProviderIds = Object.keys(auth.data);
+    const allProviderIds = Array.from(new Set([...modelProviderIds, ...authProviderIds]));
+
+    const credentials: CredentialStatus[] = allProviderIds.map((provider) => {
+      if (provider in auth.data) {
+        const credential = recordSchema.safeParse(auth.data[provider]);
+        const data = credential.success ? credential.data : {};
+        return {
+          provider,
+          type: typeof data.type === "string" ? data.type : "unknown",
+          configured: typeof data.key === "string" || data.type === "oauth",
+          environmentKeys:
+            data.env && typeof data.env === "object"
+              ? Object.keys(data.env as Record<string, unknown>)
+              : [],
+        };
+      }
       return {
         provider,
-        type: typeof data.type === "string" ? data.type : "unknown",
-        configured: typeof data.key === "string" || data.type === "oauth",
-        environmentKeys:
-          data.env && typeof data.env === "object"
-            ? Object.keys(data.env as Record<string, unknown>)
-            : [],
+        type: "api",
+        configured: false,
+        environmentKeys: [],
       };
     });
 
@@ -225,6 +237,90 @@ export class PiAdapter implements AgentAdapter {
       modelsSchema.parse(input),
     );
     return writeJsonAtomic(path, restoreSecrets(parsed, previous.data));
+  }
+
+  /**
+   * Checks whether a provider has credentials configured via `pi auth check`.
+   * Pi stores credentials in auth.json.
+   */
+  async checkCredential(providerId: string): Promise<CredentialStatus> {
+    try {
+      const { stdout } = await execFileAsync(
+        "pi",
+        ["auth", "check", "--provider", providerId, "--json"],
+        { timeout: 5000 },
+      );
+      const parsed = JSON.parse(stdout) as { status: string; authType?: string };
+      return {
+        provider: providerId,
+        type: parsed.authType ?? "api",
+        configured: parsed.status === "ready",
+        environmentKeys: [],
+      };
+    } catch {
+      // `pi auth check` exits non-zero when no credential is configured.
+      return {
+        provider: providerId,
+        type: "api",
+        configured: false,
+        environmentKeys: [],
+      };
+    }
+  }
+
+  /**
+   * Lists providers that have credentials configured in Pi's auth.json.
+   */
+  async listConfiguredProviders(): Promise<string[]> {
+    const authPath = join(this.configDir, "auth.json");
+    try {
+      const auth = await readJsonDocument(authPath, {}, (value) => recordSchema.parse(value));
+      return Object.keys(auth.data);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Removes a provider's credentials from Pi's auth.json.
+   */
+  async logoutProvider(providerId: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const authPath = join(this.configDir, "auth.json");
+      const auth = await readJsonDocument(authPath, {}, (value) => recordSchema.parse(value));
+      if (!(providerId in auth.data)) {
+        return { success: false, message: `Provider "${providerId}" 没有配置的凭据` };
+      }
+      delete (auth.data as Record<string, unknown>)[providerId];
+      await writeJsonAtomic(authPath, auth.data);
+      return { success: true, message: `已移除 ${providerId} 的凭据` };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : "移除凭据失败" };
+    }
+  }
+
+  /**
+   * Sets an API Key for a provider in Pi's auth.json.
+   */
+  async setApiKey(
+    providerId: string,
+    apiKey: string,
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      const authPath = join(this.configDir, "auth.json");
+      const auth = await readJsonDocument(authPath, {}, (value) => recordSchema.parse(value));
+      (auth.data as Record<string, unknown>)[providerId] = {
+        type: "api",
+        key: apiKey,
+      };
+      await writeJsonAtomic(authPath, auth.data);
+      return { success: true, message: `已保存 ${providerId} 的 API Key` };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "保存 API Key 失败",
+      };
+    }
   }
 }
 

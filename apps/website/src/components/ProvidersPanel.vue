@@ -1,13 +1,5 @@
 <script setup lang="ts">
-import {
-  ExternalLink,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Sparkles,
-  Trash2,
-  TriangleAlert,
-} from "@lucide/vue";
+import { ExternalLink, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "@lucide/vue";
 import { message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import type { ModelIssue } from "../model-validation.ts";
@@ -16,13 +8,10 @@ import {
   type ModelConfiguration,
   type ModelsConfiguration,
   type ProviderPreset,
-  REDACTED,
-  type SecretReference,
 } from "../types.ts";
 
 const props = defineProps<{
   models: ModelsConfiguration;
-  secretRefs: SecretReference[];
   presets: ProviderPreset[];
   issues: ModelIssue[];
   presetsRefreshing?: boolean;
@@ -90,28 +79,6 @@ const editingIssues = computed(() => {
     .filter((issue) => issue.modelIndex === index)
     .map((issue) => issue.message);
 });
-
-/**
- * The form only ever produces a `$VAR_NAME` reference. The agent reads that variable from
- * its own environment when it authenticates, so no key is ever written to models.json.
- */
-const keyVariable = computed<string>({
-  get: () => {
-    const value = provider.value?.apiKey ?? "";
-    return value.startsWith("$") ? value.slice(1) : "";
-  },
-  set: (value) => {
-    if (!provider.value) return;
-    const name = value.replaceAll(/[^A-Za-z0-9_]/g, "_").toUpperCase();
-    if (name) provider.value.apiKey = `$${name}`;
-    else delete provider.value.apiKey;
-  },
-});
-const hasLiteralKey = computed(() => provider.value?.apiKey === REDACTED);
-const isCommandKey = computed(() => provider.value?.apiKey?.startsWith("!") ?? false);
-const keyStatus = computed(() =>
-  props.secretRefs.find((reference) => reference.name === keyVariable.value),
-);
 
 watch(
   providerIds,
@@ -187,12 +154,6 @@ function addProviderFromPreset() {
 }
 function removeProvider() {
   delete working.value.providers[selectedId.value];
-}
-
-/** Drops the literal value so the next save writes a reference instead. */
-function convertLiteralKey() {
-  if (!provider.value) return;
-  provider.value.apiKey = `$${selectedId.value.replaceAll(/[^A-Za-z0-9_]/g, "_").toUpperCase()}_API_KEY`;
 }
 
 function addModel() {
@@ -274,20 +235,9 @@ function modelRowKey(model: ModelConfiguration) {
             ></a-popconfirm
           ></template
         >
-        <a-alert v-if="hasLiteralKey" type="warning" show-icon class="key-alert">
-          <template #message>配置文件里存在明文密钥</template>
-          <template #description
-            >PIM 不保存密钥值。点「改用变量」会把它换成一个环境变量引用，保存后原明文将从
-            models.json 中移除（仍会留在 .pim/backups 的备份里），请先确认你已经把这个值导出到 shell
-            环境。</template
-          >
-          <template #action
-            ><a-button size="small" @click="convertLiteralKey">改用变量</a-button></template
-          >
-        </a-alert>
         <a-form layout="vertical">
           <a-row :gutter="20">
-            <a-col :span="24"
+            <a-col :xs="24" :md="16"
               ><a-form-item
                 label="Base URL"
                 :validate-status="providerLevelIssues.length ? 'error' : undefined"
@@ -296,7 +246,7 @@ function modelRowKey(model: ModelConfiguration) {
                   v-model:value="provider.baseUrl"
                   placeholder="https://api.example.com/v1" /></a-form-item
             ></a-col>
-            <a-col :xs="24" :md="12"
+            <a-col :xs="24" :md="8"
               ><a-form-item label="API 类型"
                 ><a-select v-model:value="provider.api"
                   ><a-select-option value="openai-completions"
@@ -309,29 +259,6 @@ function modelRowKey(model: ModelConfiguration) {
                 ></a-form-item
               ></a-col
             >
-            <a-col :xs="24" :md="12">
-              <a-form-item label="API Key 环境变量">
-                <a-input
-                  v-if="!isCommandKey"
-                  v-model:value="keyVariable"
-                  addon-before="$"
-                  placeholder="PI_OPENAI_API_KEY"
-                  :disabled="hasLiteralKey"
-                />
-                <a-input v-else :value="provider.apiKey" disabled />
-                <template #extra>
-                  <span v-if="isCommandKey">命令引用，如需修改请使用高级 JSON。</span>
-                  <span v-else-if="!keyVariable">留空表示该 Provider 不需要密钥。</span>
-                  <span v-else-if="keyStatus?.present">
-                    <a-tag color="success">环境变量已就绪</a-tag>Agent 启动时会自行读取它去授权。
-                  </span>
-                  <span v-else>
-                    <TriangleAlert :size="12" /> 当前 PIM 进程里没有这个变量，记得在启动 Agent 的
-                    shell 里 export。
-                  </span>
-                </template>
-              </a-form-item>
-            </a-col>
           </a-row>
         </a-form>
       </a-card>
@@ -487,7 +414,7 @@ function modelRowKey(model: ModelConfiguration) {
           <template #message>预设只是起点</template>
           <template #description
             >模型 ID
-            和价格会随厂商调整，导入后请对照官方文档核对；若发现列表过时，在「模型目录」点「刷新预设」可从官网文档同步最新模型与价格。密钥仍然只写环境变量引用。</template
+            和价格会随厂商调整，导入后请对照官方文档核对；若发现列表过时，在「模型目录」点「刷新预设」可从官网文档同步最新模型与价格。</template
           >
         </a-alert>
       </template>

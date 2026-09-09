@@ -1,15 +1,5 @@
 <script setup lang="ts">
-import {
-  Code2,
-  Cpu,
-  Crown,
-  KeyRound,
-  Package,
-  RefreshCw,
-  Save,
-  Settings,
-  SlidersHorizontal,
-} from "@lucide/vue";
+import { Code2, Cpu, Crown, RefreshCw, Save, Settings, SlidersHorizontal } from "@lucide/vue";
 import { message, Modal } from "antdv-next";
 import { computed, onMounted, ref, watch } from "vue";
 import {
@@ -25,14 +15,12 @@ import {
   saveSettings,
 } from "./api.ts";
 import AgentRail from "./components/AgentRail.vue";
-import CredentialsPanel from "./components/CredentialsPanel.vue";
 import GeneralSettings from "./components/GeneralSettings.vue";
 import JsonInspector from "./components/JsonInspector.vue";
 import OmpModelRoles from "./components/OmpModelRoles.vue";
 import OmpRoleSelector from "./components/OmpRoleSelector.vue";
 import PersonaEditor from "./components/PersonaEditor.vue";
 import ProvidersPanel from "./components/ProvidersPanel.vue";
-import ResourcesPanel from "./components/ResourcesPanel.vue";
 import { pruneEmptyValues, validateModels } from "./model-validation.ts";
 import type {
   AgentConfiguration,
@@ -49,14 +37,12 @@ import type {
  * backend adapter — no changes here.
  */
 const sectionCatalog = [
-  // OMP 专属：模型·角色 / 人格·预设 / 设置
+  // OMP 专属：模型·角色 / 人格·预设
   { key: "model", label: "模型 · 角色", icon: Cpu, caps: ["model", "modelRoles"] },
   { key: "persona", label: "人格 · 预设", icon: Crown, caps: ["persona", "roles"] },
-  // Pi 与通用
+  // 通用
   { key: "settings", label: "基础设置", icon: Settings, caps: ["settings"] },
   { key: "providers", label: "模型服务", icon: SlidersHorizontal, caps: ["providers", "models"] },
-  { key: "credentials", label: "凭据与变量", icon: KeyRound, caps: ["credentials"] },
-  { key: "resources", label: "资源", icon: Package, caps: ["resources"] },
 ] as const;
 
 const agents = ref<AgentSummary[]>([]);
@@ -428,20 +414,12 @@ onMounted(() => load());
               <ProvidersPanel
                 v-else-if="activeView === 'providers'"
                 :models="models"
-                :secret-refs="config.secretRefs"
                 :presets="presets"
                 :issues="modelIssues"
                 :presets-refreshing="presetsRefreshing"
                 @refresh-presets="refreshPresets"
                 @change="applyModelsDraft"
               />
-              <CredentialsPanel
-                v-else-if="activeView === 'credentials'"
-                :credentials="config.credentials"
-                :secret-refs="config.secretRefs"
-                :config-dir="config.agent.configDir"
-              />
-              <ResourcesPanel v-else :settings="settings" @change="applySettingsDraft" />
             </template>
           </div>
         </section>

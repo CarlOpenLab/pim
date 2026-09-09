@@ -198,6 +198,96 @@ app.put("/api/agents/:id/models", async (context) => {
   }
 });
 
+/**
+ * Checks whether a provider has credentials configured.
+ * For OMP: uses `omp token <provider>`.
+ * For Pi: uses `pi auth check --provider <provider>`.
+ */
+app.get("/api/agents/:id/auth-broker/check", async (context) => {
+  const adapter = adapters.get(context.req.param("id"));
+  if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
+  if (!("checkCredential" in adapter)) {
+    return context.json({ error: "该 Agent 不支持凭据检查" }, 400);
+  }
+  const providerId = context.req.query("providerId");
+  if (!providerId || typeof providerId !== "string") {
+    return context.json({ error: "需要指定 providerId" }, 400);
+  }
+  try {
+    const result = await (adapter as OmpAdapter | PiAdapter).checkCredential(providerId);
+    return context.json(result);
+  } catch (error) {
+    return context.json({ error: error instanceof Error ? error.message : "检查凭据失败" }, 500);
+  }
+});
+
+/**
+ * Removes a provider's credentials.
+ * For OMP: runs `omp auth-broker logout <provider>`.
+ * For Pi: removes from auth.json.
+ */
+app.post("/api/agents/:id/auth-broker/logout", async (context) => {
+  const adapter = adapters.get(context.req.param("id"));
+  if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
+  if (!("logoutProvider" in adapter)) {
+    return context.json({ error: "该 Agent 不支持退出登录" }, 400);
+  }
+  const body = (await context.req.json().catch(() => ({}))) as { providerId?: string };
+  if (!body.providerId || typeof body.providerId !== "string") {
+    return context.json({ error: "需要指定 providerId" }, 400);
+  }
+  try {
+    const result = await (adapter as OmpAdapter | PiAdapter).logoutProvider(body.providerId);
+    if (result.success) {
+      return context.json(result);
+    }
+    return context.json({ ...result, error: result.message }, 400);
+  } catch (error) {
+    return context.json(
+      { success: false, error: error instanceof Error ? error.message : "退出登录失败" },
+      500,
+    );
+  }
+});
+
+/**
+ * Sets an API Key for a provider.
+ * For OMP: stores in agent.db.
+ * For Pi: stores in auth.json.
+ */
+app.post("/api/agents/:id/auth-broker/set-key", async (context) => {
+  const adapter = adapters.get(context.req.param("id"));
+  if (!adapter) return context.json({ error: "Unsupported agent" }, 404);
+  if (!("setApiKey" in adapter)) {
+    return context.json({ error: "该 Agent 不支持设置 API Key" }, 400);
+  }
+  const body = (await context.req.json().catch(() => ({}))) as {
+    providerId?: string;
+    apiKey?: string;
+  };
+  if (!body.providerId || typeof body.providerId !== "string") {
+    return context.json({ error: "需要指定 providerId" }, 400);
+  }
+  if (!body.apiKey || typeof body.apiKey !== "string") {
+    return context.json({ error: "需要指定 apiKey" }, 400);
+  }
+  try {
+    const result = await (adapter as OmpAdapter | PiAdapter).setApiKey(
+      body.providerId,
+      body.apiKey,
+    );
+    if (result.success) {
+      return context.json(result);
+    }
+    return context.json({ ...result, error: result.message }, 400);
+  } catch (error) {
+    return context.json(
+      { success: false, error: error instanceof Error ? error.message : "设置 API Key 失败" },
+      500,
+    );
+  }
+});
+
 app.onError((error, context) => {
   console.error(error);
   const message = error instanceof Error ? error.message : "Unexpected server error";

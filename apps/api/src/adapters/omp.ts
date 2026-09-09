@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { ompRolePresets } from "../presets/omp.js";
 import {
@@ -118,6 +121,7 @@ const providerSchema = z
       .optional(),
     apiKey: z.string().optional(),
     oauth: z.string().optional(),
+    auth: z.enum(["apiKey", "none", "oauth"]).optional(),
     authHeader: z.boolean().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     models: z.array(modelSchema).optional(),
@@ -178,6 +182,248 @@ async function fetchAvailableModels(): Promise<OmpAvailableModel[]> {
     return [];
   } catch {
     return [];
+  }
+}
+
+export function getOmpAgentDir(configDir: string): string {
+  if (configDir.endsWith("/agent") || configDir.endsWith("\\agent")) {
+    return configDir;
+  }
+  const nested = join(configDir, "agent");
+  if (existsSync(nested)) return nested;
+  return configDir;
+}
+
+export function resolveOmpModelsReadPath(
+  configDir: string,
+): { path: string; format: "yaml" | "json" } | null {
+  const agentDir = getOmpAgentDir(configDir);
+  const candidates: Array<{ path: string; format: "yaml" | "json" }> = [
+    { path: join(agentDir, "models.yml"), format: "yaml" },
+    { path: join(agentDir, "models.yaml"), format: "yaml" },
+    { path: join(agentDir, "models.json"), format: "json" },
+    { path: join(configDir, "models.json"), format: "json" },
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate.path)) return candidate;
+  }
+  return null;
+}
+
+export function getOmpAgentDbPath(configDir: string): string {
+  const agentDir = getOmpAgentDir(configDir);
+  const direct = join(agentDir, "agent.db");
+  if (existsSync(direct)) return direct;
+  const flat = join(configDir, "agent.db");
+  if (existsSync(flat)) return flat;
+  return direct;
+}
+
+function openOmpDatabase(dbPath: string): DatabaseSync {
+  const dir = dirname(dbPath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS auth_schema_version (
+      id INTEGER PRIMARY KEY,
+      version INTEGER NOT NULL
+    );
+    INSERT OR IGNORE INTO auth_schema_version(id, version) VALUES (1, 7);
+
+    CREATE TABLE IF NOT EXISTS auth_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      credential_type TEXT NOT NULL,
+      data TEXT NOT NULL,
+      disabled_cause TEXT,
+      identity_key TEXT,
+      created_at INTEGER,
+      updated_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_provider ON auth_credentials(provider);
+  `);
+  return db;
+}
+
+export function listActiveOmpCredentials(
+  dbPath: string,
+): Map<string, { id: number; type: string; key?: string }> {
+  if (!existsSync(dbPath)) return new Map();
+  try {
+    const db = new DatabaseSync(dbPath);
+    try {
+      const tableCheck = db
+        .prepare(
+          "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='auth_credentials'",
+        )
+        .get() as { present?: number } | undefined;
+      if (!tableCheck?.present) return new Map();
+
+      const stmt = db.prepare(
+        "SELECT id, provider, credential_type, data, disabled_cause FROM auth_credentials WHERE disabled_cause IS NULL ORDER BY id ASC",
+      );
+      const rows = stmt.all() as Array<{
+        id: number;
+        provider: string;
+        credential_type: string;
+        data: string;
+        disabled_cause: string | null;
+      }>;
+      const result = new Map<string, { id: number; type: string; key?: string }>();
+      for (const row of rows) {
+        let key: string | undefined;
+        try {
+          const parsed = JSON.parse(row.data);
+          if (parsed && typeof parsed.key === "string") key = parsed.key;
+        } catch {
+          // ignore
+        }
+        result.set(row.provider, {
+          id: row.id,
+          type: row.credential_type === "oauth" ? "oauth" : "api",
+          key,
+        });
+      }
+      return result;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return new Map();
+  }
+}
+
+export function setOmpApiKey(dbPath: string, providerId: string, apiKey: string): void {
+  const db = openOmpDatabase(dbPath);
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const data = JSON.stringify({ key: apiKey, source: "login" });
+
+    const existing = db
+      .prepare("SELECT id FROM auth_credentials WHERE provider = ? AND disabled_cause IS NULL")
+      .all(providerId) as Array<{ id: number }>;
+
+    if (existing.length > 0) {
+      const firstId = existing[0]!.id;
+      db.prepare(
+        "UPDATE auth_credentials SET credential_type = 'api_key', data = ?, identity_key = NULL, updated_at = ? WHERE id = ?",
+      ).run(data, now, firstId);
+
+      for (let i = 1; i < existing.length; i++) {
+        db.prepare(
+          "UPDATE auth_credentials SET disabled_cause = 'replaced by newer credential', updated_at = ? WHERE id = ?",
+        ).run(now, existing[i]!.id);
+      }
+    } else {
+      db.prepare(
+        "INSERT INTO auth_credentials (provider, credential_type, data, identity_key, created_at, updated_at) VALUES (?, 'api_key', ?, NULL, ?, ?)",
+      ).run(providerId, data, now, now);
+    }
+
+    try {
+      db.prepare(
+        "DELETE FROM auth_credentials WHERE provider = ? AND disabled_cause IS NOT NULL AND credential_type = 'api_key'",
+      ).run(providerId);
+    } catch {
+      // ignore
+    }
+  } finally {
+    db.close();
+  }
+}
+
+export function deleteOmpCredentials(dbPath: string, providerId: string): boolean {
+  if (!existsSync(dbPath)) return false;
+  try {
+    const db = new DatabaseSync(dbPath);
+    try {
+      const tableCheck = db
+        .prepare(
+          "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='auth_credentials'",
+        )
+        .get() as { present?: number } | undefined;
+      if (!tableCheck?.present) return false;
+
+      const now = Math.floor(Date.now() / 1000);
+      const result = db
+        .prepare(
+          "UPDATE auth_credentials SET disabled_cause = 'logged out by user', updated_at = ? WHERE provider = ? AND disabled_cause IS NULL",
+        )
+        .run(now, providerId);
+      return (result.changes ?? 0) > 0;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checks whether a provider has credentials configured via SQLite agent.db,
+ * with fallback to `omp token <provider>`.
+ */
+async function checkProviderCredential(
+  providerId: string,
+  dbPath?: string,
+): Promise<CredentialStatus> {
+  if (dbPath) {
+    const active = listActiveOmpCredentials(dbPath);
+    const entry = active.get(providerId);
+    if (entry) {
+      return {
+        provider: providerId,
+        type: entry.type,
+        configured: true,
+        environmentKeys: [],
+      };
+    }
+  }
+  try {
+    const { stdout } = await execFileAsync("omp", ["token", providerId], { timeout: 3000 });
+    const hasCredential = stdout.trim().length > 0;
+    return {
+      provider: providerId,
+      type: "api",
+      configured: hasCredential,
+      environmentKeys: [],
+    };
+  } catch {
+    return {
+      provider: providerId,
+      type: "api",
+      configured: false,
+      environmentKeys: [],
+    };
+  }
+}
+
+/**
+ * Triggers the logout flow for a provider via agent.db,
+ * with best-effort fallback to `omp auth-broker logout <provider>`.
+ */
+export async function triggerAuthLogout(
+  providerId: string,
+  dbPath?: string,
+): Promise<{ success: boolean; message: string }> {
+  let dbRemoved = false;
+  if (dbPath) {
+    dbRemoved = deleteOmpCredentials(dbPath, providerId);
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync("omp", ["auth-broker", "logout", providerId], {
+      timeout: 5000,
+    });
+    const output = stdout.trim() || stderr.trim();
+    return { success: true, message: output || "已退出登录" };
+  } catch (error) {
+    if (dbRemoved) {
+      return { success: true, message: `已移除 ${providerId} 的凭据` };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, message: `退出登录失败：${message}` };
   }
 }
 
@@ -271,12 +517,10 @@ export class OmpAdapter implements AgentAdapter {
       version,
       configDir: this.configDir,
       capabilities: [
-        "settings",
         "model",
         "providers",
         "models",
         "persona",
-        "credentials",
         // legacy aliases kept hidden but do not drive tabs
         "modelRoles",
         "roles",
@@ -290,14 +534,11 @@ export class OmpAdapter implements AgentAdapter {
       scope === "global"
         ? join(this.configDir, "settings.json")
         : join(root, ".omp", "settings.json");
-    const modelsPath = join(this.configDir, "models.json");
-    const authPath = join(this.configDir, "auth.json");
 
-    const [agent, settings, models, auth, ompConfigMap] = await Promise.all([
+    const [agent, settings, models, ompConfigMap] = await Promise.all([
       this.inspect(),
       readJsonDocument(settingsPath, {}, (value) => settingsSchema.parse(value)),
-      readJsonDocument(modelsPath, { providers: {} }, (value) => modelsSchema.parse(value)),
-      readJsonDocument(authPath, {}, (value) => recordSchema.parse(value)),
+      this.readModelsDocument(),
       fetchOmpConfigMap(),
     ]);
 
@@ -348,19 +589,27 @@ export class OmpAdapter implements AgentAdapter {
       // keep empty, frontend uses presets
     }
 
-    const credentials: CredentialStatus[] = Object.entries(auth.data).map(([provider, value]) => {
-      const credential = recordSchema.safeParse(value);
-      const data = credential.success ? credential.data : {};
-      return {
-        provider,
-        type: typeof data.type === "string" ? data.type : "unknown",
-        configured: typeof data.key === "string" || data.type === "oauth",
-        environmentKeys:
-          data.env && typeof data.env === "object"
-            ? Object.keys(data.env as Record<string, unknown>)
-            : [],
-      };
-    });
+    // OMP stores credentials in its own internal storage (agent.db in ~/.omp/agent/agent.db),
+    // and can also resolve credentials via `omp token <provider>`.
+    const dbPath = this.getAgentDbPath();
+    const activeOmpCreds = listActiveOmpCredentials(dbPath);
+    const modelProviderIds = Object.keys(models.data.providers ?? {});
+    const allProviderIds = Array.from(new Set([...modelProviderIds, ...activeOmpCreds.keys()]));
+
+    const credentials: CredentialStatus[] = await Promise.all(
+      allProviderIds.map(async (id) => {
+        const active = activeOmpCreds.get(id);
+        if (active) {
+          return {
+            provider: id,
+            type: active.type,
+            configured: true,
+            environmentKeys: [],
+          };
+        }
+        return checkProviderCredential(id, dbPath);
+      }),
+    );
 
     return {
       agent,
@@ -459,14 +708,91 @@ export class OmpAdapter implements AgentAdapter {
     const result = await writeJsonAtomic(path, rest);
     return migratedKeys.length ? { ...result, migratedKeys } : result;
   }
+  async readModelsDocument(): Promise<{
+    path: string;
+    exists: boolean;
+    data: ModelsConfiguration;
+    diagnostics: Array<{ level: "error" | "warning"; file: string; message: string }>;
+    modifiedAt: string | null;
+  }> {
+    const resolved = resolveOmpModelsReadPath(this.configDir);
+    if (!resolved) {
+      return readJsonDocument(join(this.configDir, "models.json"), { providers: {} }, (value) =>
+        modelsSchema.parse(value),
+      ) as Promise<{
+        path: string;
+        exists: boolean;
+        data: ModelsConfiguration;
+        diagnostics: Array<{ level: "error" | "warning"; file: string; message: string }>;
+        modifiedAt: string | null;
+      }>;
+    }
+    if (resolved.format === "yaml") {
+      try {
+        const content = readFileSync(resolved.path, "utf8");
+        const parsed = (parseYaml(content) as unknown) ?? { providers: {} };
+        const data = modelsSchema.parse(parsed) as ModelsConfiguration;
+        return {
+          path: resolved.path,
+          exists: true,
+          data,
+          diagnostics: [],
+          modifiedAt: new Date().toISOString(),
+        };
+      } catch {
+        return readJsonDocument(join(this.configDir, "models.json"), { providers: {} }, (value) =>
+          modelsSchema.parse(value),
+        ) as Promise<{
+          path: string;
+          exists: boolean;
+          data: ModelsConfiguration;
+          diagnostics: Array<{ level: "error" | "warning"; file: string; message: string }>;
+          modifiedAt: string | null;
+        }>;
+      }
+    }
+    return readJsonDocument(resolved.path, { providers: {} }, (value) =>
+      modelsSchema.parse(value),
+    ) as Promise<{
+      path: string;
+      exists: boolean;
+      data: ModelsConfiguration;
+      diagnostics: Array<{ level: "error" | "warning"; file: string; message: string }>;
+      modifiedAt: string | null;
+    }>;
+  }
+
   async writeModels(value: ModelsConfiguration): Promise<SaveResult> {
     const parsed = modelsSchema.parse(value) as ModelsConfiguration;
     assertNoLiteralSecrets(parsed);
     const path = join(this.configDir, "models.json");
-    const previous = await readJsonDocument(path, { providers: {} }, (input) =>
-      modelsSchema.parse(input),
-    );
-    return writeJsonAtomic(path, restoreSecrets(parsed, previous.data as ModelsConfiguration));
+    const previous = await this.readModelsDocument();
+    const restored = restoreSecrets(
+      parsed,
+      previous.data as ModelsConfiguration,
+    ) as ModelsConfiguration;
+    const result = await writeJsonAtomic(path, restored);
+
+    const agentDir = getOmpAgentDir(this.configDir);
+    if (existsSync(agentDir)) {
+      const agentJsonPath = join(agentDir, "models.json");
+      if (agentJsonPath !== path) {
+        await writeJsonAtomic(agentJsonPath, restored);
+      }
+      const activeCreds = listActiveOmpCredentials(this.getAgentDbPath());
+      const ymlData = JSON.parse(JSON.stringify(restored)) as ModelsConfiguration;
+      for (const [providerId, prov] of Object.entries(ymlData.providers)) {
+        if (activeCreds.has(providerId) && (prov.apiKey?.startsWith("$") || !prov.apiKey)) {
+          prov.auth = "oauth";
+          delete prov.apiKey;
+        }
+      }
+      const ymlContent = stringifyYaml(ymlData);
+      const agentYmlPath = join(agentDir, "models.yml");
+      writeFileSync(agentYmlPath, ymlContent, "utf8");
+    }
+
+    return result;
   }
 
   getRolePresets() {
@@ -484,6 +810,61 @@ export class OmpAdapter implements AgentAdapter {
   async setModelRoles(roles: Record<string, string>): Promise<Record<string, string>> {
     await writeOmpModelRoles(roles);
     return roles;
+  }
+
+  getAgentDbPath(): string {
+    return getOmpAgentDbPath(this.configDir);
+  }
+
+  /**
+   * Removes a provider's credentials from agent.db.
+   */
+  async logoutProvider(providerId: string): Promise<{ success: boolean; message: string }> {
+    return triggerAuthLogout(providerId, this.getAgentDbPath());
+  }
+
+  /**
+   * Checks whether a provider has credentials configured in agent.db.
+   */
+  async checkCredential(providerId: string): Promise<CredentialStatus> {
+    return checkProviderCredential(providerId, this.getAgentDbPath());
+  }
+
+  /**
+   * Sets an API Key for a provider in agent.db.
+   */
+  async setApiKey(
+    providerId: string,
+    apiKey: string,
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      const dbPath = this.getAgentDbPath();
+      setOmpApiKey(dbPath, providerId, apiKey);
+      try {
+        const agentDir = getOmpAgentDir(this.configDir);
+        const ymlPath = join(agentDir, "models.yml");
+        if (existsSync(ymlPath)) {
+          const content = readFileSync(ymlPath, "utf8");
+          const parsed = parseYaml(content) as ModelsConfiguration | null;
+          if (parsed?.providers && parsed.providers[providerId]) {
+            const prov = parsed.providers[providerId];
+            if (prov.apiKey?.startsWith("$") || !prov.apiKey) {
+              prov.auth = "oauth";
+              delete prov.apiKey;
+              writeFileSync(ymlPath, stringifyYaml(parsed), "utf8");
+            }
+          }
+        }
+      } catch {
+        // best effort
+      }
+      return { success: true, message: `已保存 ${providerId} 的 API Key` };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "保存 API Key 失败",
+      };
+    }
   }
 }
 

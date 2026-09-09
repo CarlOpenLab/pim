@@ -18,3 +18,25 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+## AI Model Pricing (Command Code GOAT)
+
+This project uses Command Code with the GOAT plan. The default model is `deepseek/deepseek-v4-flash`.
+
+### DeepSeek V4 Flash — Off-Peak vs Peak
+
+| Period       | Input / 1M | Output / 1M | Cache Read / 1M |
+| ------------ | ---------- | ----------- | --------------- |
+| **Off-Peak** | $0.22      | $0.66       | $0.007          |
+| **Peak**     | $0.44      | $1.32       | $0.007          |
+
+**Peak hours (Beijing time):** UTC 01–04 & 06–10, Mon–Fri → **09:00–12:00 & 14:00–18:00, Mon–Fri**
+
+**Off-Peak hours (Beijing time):**
+
+- Weekdays: 00:00–09:00, 12:00–14:00, 18:00–24:00
+- Weekends: all day
+
+### Recommendation
+
+Use **DeepSeek V4 Flash Fast** (`deepseek/deepseek-v4-flash-fast`) during peak hours — fixed $0.28/$0.56 with no peak premium, roughly **50-60% cheaper** than Flash during busy periods. Switch back to Flash during off-peak if you prefer the slightly higher intelligence score (41 vs untested).

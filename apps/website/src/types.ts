@@ -1,14 +1,6 @@
 export type AgentId = "pi" | "omp";
 export type ConfigScope = "global" | "project";
-export type ViewId =
-  | "settings"
-  | "providers"
-  | "credentials"
-  | "resources"
-  | "roles"
-  | "modelRoles"
-  | "model"
-  | "persona";
+export type ViewId = "settings" | "providers" | "roles" | "modelRoles" | "model" | "persona";
 export interface OmpAvailableModel {
   provider: string;
   id: string;
@@ -29,19 +21,6 @@ export interface OmpRolePreset {
   prompt: string;
   icon: string;
   accent: string;
-}
-
-export interface TerminalConfig {
-  theme?: "dark" | "light" | "auto";
-  fontFamily?: string;
-  fontSize?: number;
-  lineHeight?: number;
-  opacity?: number;
-  blur?: boolean;
-  cursorStyle?: "block" | "underline" | "bar";
-  cursorBlink?: boolean;
-  background?: string;
-  accent?: string;
 }
 
 /** Sentinel the API sends in place of a literal secret it found on disk. */

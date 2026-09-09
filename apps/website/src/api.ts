@@ -105,3 +105,37 @@ export function saveModels(agentId: string, models: ModelsConfiguration): Promis
     body: JSON.stringify({ models }),
   });
 }
+
+export async function logoutProvider(
+  agentId: string,
+  providerId: string,
+): Promise<{ success: boolean; message: string }> {
+  return request(`/api/agents/${agentId}/auth-broker/logout`, {
+    method: "POST",
+    body: JSON.stringify({ providerId }),
+  });
+}
+
+export async function checkCredential(
+  agentId: string,
+  providerId: string,
+): Promise<{ provider: string; type: string; configured: boolean; environmentKeys: string[] }> {
+  const payload = await request<{
+    provider: string;
+    type: string;
+    configured: boolean;
+    environmentKeys: string[];
+  }>(`/api/agents/${agentId}/auth-broker/check?providerId=${encodeURIComponent(providerId)}`);
+  return payload;
+}
+
+export async function setApiKey(
+  agentId: string,
+  providerId: string,
+  apiKey: string,
+): Promise<{ success: boolean; message: string }> {
+  return request(`/api/agents/${agentId}/auth-broker/set-key`, {
+    method: "POST",
+    body: JSON.stringify({ providerId, apiKey }),
+  });
+}
